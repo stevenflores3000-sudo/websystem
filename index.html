@@ -45,27 +45,62 @@
                 <h2 class="form-card-title">Sign In</h2>
                 <p class="form-card-sub">Access your voter account</p>
                 <div class="role-toggle mb-4">
-                    <button id="voter-tab" class="role-btn active" onclick="setRole('voter')"><i class="bi bi-person-fill me-1"></i>Voter</button>
-                    <button id="admin-tab" class="role-btn" onclick="setRole('admin')"><i class="bi bi-gear-fill me-1"></i>Admin</button>
+                    <button type="button" id="voter-tab" class="role-btn active" onclick="setRole('voter')"><i class="bi bi-person-fill me-1"></i>Voter</button>
+                    <button type="button" id="admin-tab" class="role-btn" onclick="setRole('admin')"><i class="bi bi-gear-fill me-1"></i>Admin</button>
                     <div class="role-slider" id="role-slider"></div>
                 </div>
-                <div class="field-group mb-3">
-                    <label class="field-label" id="id-label">Student ID</label>
-                    <div class="input-wrap">
-                        <i class="bi bi-person input-icon"></i>
-                        <input type="text" id="loginID" class="field-input" placeholder="e.g. 2021-12345">
+
+                <!-- VOTER LOGIN FORM → voter_login.php -->
+                <form id="voter-login-form" action="voter_login.php" method="POST">
+                    <input type="hidden" name="role" value="voter">
+                    <div class="field-group mb-3">
+                        <label class="field-label" id="id-label">Student ID</label>
+                        <div class="input-wrap">
+                            <i class="bi bi-person input-icon"></i>
+                            <input type="text" id="loginID" name="student_id"
+                                   class="field-input" placeholder="e.g. 2021-12345" required>
+                        </div>
                     </div>
-                </div>
-                <div class="field-group mb-4">
-                    <label class="field-label">Password</label>
-                    <div class="input-wrap">
-                        <i class="bi bi-lock input-icon"></i>
-                        <input type="password" id="loginPass" class="field-input" placeholder="Enter your password">
-                        <button class="toggle-pass" onclick="togglePass('loginPass', this)" tabindex="-1"><i class="bi bi-eye"></i></button>
+                    <div class="field-group mb-4">
+                        <label class="field-label">Password</label>
+                        <div class="input-wrap">
+                            <i class="bi bi-lock input-icon"></i>
+                            <input type="password" id="loginPass" name="password"
+                                   class="field-input" placeholder="Enter your password" required>
+                            <button type="button" class="toggle-pass" onclick="togglePass('loginPass', this)" tabindex="-1"><i class="bi bi-eye"></i></button>
+                        </div>
                     </div>
-                </div>
-                <button class="btn-primary-cta w-100 mb-3" onclick="loginAction()"><i class="bi bi-box-arrow-in-right me-2"></i>Sign In</button>
-                <div class="d-flex justify-content-between">
+                    <button type="submit" class="btn-primary-cta w-100 mb-3">
+                        <i class="bi bi-box-arrow-in-right me-2"></i>Sign In
+                    </button>
+                </form>
+
+                <!-- ADMIN LOGIN FORM → admin_login.php (hidden by default, shown via JS setRole) -->
+                <form id="admin-login-form" action="admin_login.php" method="POST" class="d-none">
+                    <input type="hidden" name="role" value="admin">
+                    <div class="field-group mb-3">
+                        <label class="field-label" id="admin-id-label">Admin ID</label>
+                        <div class="input-wrap">
+                            <i class="bi bi-person input-icon"></i>
+                            <input type="text" id="adminLoginID" name="admin_id"
+                                   class="field-input" placeholder="Enter Admin ID" required>
+                        </div>
+                    </div>
+                    <div class="field-group mb-4">
+                        <label class="field-label">Password</label>
+                        <div class="input-wrap">
+                            <i class="bi bi-lock input-icon"></i>
+                            <input type="password" id="adminLoginPass" name="password"
+                                   class="field-input" placeholder="Enter your password" required>
+                            <button type="button" class="toggle-pass" onclick="togglePass('adminLoginPass', this)" tabindex="-1"><i class="bi bi-eye"></i></button>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn-primary-cta w-100 mb-3">
+                        <i class="bi bi-box-arrow-in-right me-2"></i>Sign In
+                    </button>
+                </form>
+
+                <div class="d-flex justify-content-between mt-1">
                     <a href="#" class="link-subtle" onclick="showForgot(); return false;">Forgot Password?</a>
                     <a href="#" class="link-accent" onclick="showRegister(); return false;">Create Account</a>
                 </div>
@@ -75,129 +110,190 @@
             <div id="register-section" class="auth-form-card d-none">
                 <h2 class="form-card-title">Create Account</h2>
                 <p class="form-card-sub">Join the NU-SmartVote system</p>
-                <div class="field-group mb-3">
-                    <label class="field-label">Student ID</label>
-                    <div class="input-wrap">
-                        <i class="bi bi-person-badge input-icon"></i>
-                        <input type="text" id="regID" class="field-input" placeholder="2021-12345">
+
+                <!--
+                    ACTION → register.php
+                    name attributes match ERD columns:
+                      student_id | name (full name) | email | department | password
+                    JS registerUser() still validates client-side before PHP sends to MySQL
+                -->
+                <form id="register-form" action="register.php" method="POST"
+                      onsubmit="return validateRegister(event)">
+
+                    <div class="field-group mb-3">
+                        <label class="field-label">Student ID</label>
+                        <div class="input-wrap">
+                            <i class="bi bi-person-badge input-icon"></i>
+                            <input type="text" id="regID" name="student_id"
+                                   class="field-input" placeholder="2021-12345" required>
+                        </div>
                     </div>
-                </div>
-                <div class="row g-2 mb-3">
-                    <div class="col-5">
-                        <div class="field-group">
-                            <label class="field-label">First Name</label>
-                            <div class="input-wrap">
-                                <input type="text" id="regFirst" class="field-input ps-3" placeholder="Juan" oninput="generateEmail()">
+
+                    <!-- Name row: First / M.I. / Last — JS combines into 'name' for ERD -->
+                    <div class="row g-2 mb-2">
+                        <div class="col-5">
+                            <div class="field-group">
+                                <label class="field-label">First Name</label>
+                                <div class="input-wrap">
+                                    <input type="text" id="regFirst" class="field-input ps-3"
+                                           placeholder="Juan" oninput="generateEmail()" required>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-2">
+                            <div class="field-group">
+                                <label class="field-label">M.I.</label>
+                                <div class="input-wrap mi-wrap">
+                                    <input type="text" id="regMiddle" class="field-input mi-input"
+                                           maxlength="1" placeholder="A" oninput="generateEmail()">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-5">
+                            <div class="field-group">
+                                <label class="field-label">Last Name</label>
+                                <div class="input-wrap">
+                                    <input type="text" id="regLast" class="field-input ps-3"
+                                           placeholder="Dela Cruz" oninput="generateEmail()" required>
+                                </div>
                             </div>
                         </div>
                     </div>
-                    <div class="col-2">
-                        <div class="field-group">
-                            <label class="field-label">M.I.</label>
-                            <div class="input-wrap mi-wrap">
-                                <input type="text" id="regMiddle" class="field-input mi-input" maxlength="1" placeholder="A" oninput="generateEmail()">
+                    <!--
+                        Hidden 'name' field — JS combines First + M.I. + Last here
+                        so PHP receives one value matching the ERD 'name' column
+                    -->
+                    <input type="hidden" id="regFullName" name="name" value="">
+
+                    <!-- Email: editable so students can use their real NU email -->
+                    <div class="field-group mb-3">
+                        <label class="field-label text-accent">
+                            <i class="bi bi-envelope-check me-1"></i>NU Email
+                            <span style="font-size:.65rem;color:var(--text-light);font-weight:400;margin-left:4px;">(auto-filled, editable)</span>
+                        </label>
+                        <div class="input-wrap">
+                            <i class="bi bi-envelope-check input-icon"></i>
+                            <input type="email" id="regEmail" name="email"
+                                   class="field-input" placeholder="Auto-generated — you can edit this" required>
+                        </div>
+                    </div>
+
+                    <!-- Personal Gmail for password recovery -->
+                    <div class="field-group mb-3">
+                        <label class="field-label" style="color:var(--nu-gold);">
+                            <i class="bi bi-google me-1"></i>Personal Gmail
+                            <span style="font-size:.65rem;color:var(--text-light);font-weight:400;margin-left:4px;">(used for password recovery)</span>
+                        </label>
+                        <div class="input-wrap">
+                            <i class="bi bi-envelope-at input-icon"></i>
+                            <input type="email" id="regRecovery" name="recovery_email"
+                                   class="field-input" placeholder="yourname@gmail.com" required>
+                        </div>
+                    </div>
+
+                    <div class="row g-2 mb-3">
+                        <div class="col-7">
+                            <div class="field-group">
+                                <label class="field-label">Department</label>
+                                <div class="input-wrap">
+                                    <i class="bi bi-building input-icon"></i>
+                                    <!--
+                                        name="department" matches ERD column.
+                                        Values are department codes so they fit in the DB column cleanly.
+                                    -->
+                                    <select id="regCourse" name="department" class="field-input field-select" required>
+                                        <option value="" disabled selected>Select Department / Course</option>
+                                        <optgroup label="SECA">
+                                            <option value="BSArch">BS Architecture (BSArch)</option>
+                                            <option value="BSCE">BS Civil Engineering (BSCE)</option>
+                                            <option value="BSCpE">BS Computer Engineering (BSCpE)</option>
+                                            <option value="BSCS-ML">BS Computer Science - ML (BSCS-ML)</option>
+                                            <option value="BSIT-MWA">BSIT - MWA</option>
+                                        </optgroup>
+                                        <optgroup label="SBMA">
+                                            <option value="BSA">BS Accountancy</option>
+                                            <option value="BSBA-FM">BSBA - Financial Management</option>
+                                            <option value="BSBA-HRM">BSBA - Human Resource Management</option>
+                                            <option value="BSBA-MM">BSBA - Marketing Management</option>
+                                            <option value="BSHM">BS Hospitality Management (BSHM)</option>
+                                            <option value="BSMA">BS Management Accounting (BSMA)</option>
+                                        </optgroup>
+                                        <optgroup label="SASE">
+                                            <option value="ABComm">BA in Communication (ABComm)</option>
+                                            <option value="BPEd">Bachelor of Physical Education (BPEd)</option>
+                                            <option value="BSPSY">BS in Psychology (BSPSY)</option>
+                                        </optgroup>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-5">
+                            <div class="field-group">
+                                <label class="field-label">Year Level</label>
+                                <div class="input-wrap">
+                                    <i class="bi bi-calendar3 input-icon"></i>
+                                    <select id="regYear" name="year_level" class="field-input field-select" required>
+                                        <option value="" disabled selected>Select</option>
+                                        <option value="1">1st Year</option>
+                                        <option value="2">2nd Year</option>
+                                        <option value="3">3rd Year</option>
+                                        <option value="4">4th Year</option>
+                                    </select>
+                                </div>
                             </div>
                         </div>
                     </div>
-                    <div class="col-5">
-                        <div class="field-group">
-                            <label class="field-label">Last Name</label>
-                            <div class="input-wrap">
-                                <input type="text" id="regLast" class="field-input ps-3" placeholder="Dela Cruz" oninput="generateEmail()">
+
+                    <div class="row g-2 mb-4">
+                        <div class="col-6">
+                            <div class="field-group">
+                                <label class="field-label">Password</label>
+                                <div class="input-wrap">
+                                    <i class="bi bi-lock input-icon"></i>
+                                    <input type="password" id="regPass" name="password"
+                                           class="field-input" placeholder="Min. 6 characters" required>
+                                    <button type="button" class="toggle-pass" onclick="togglePass('regPass', this)" tabindex="-1"><i class="bi bi-eye"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="field-group">
+                                <label class="field-label">Confirm Password</label>
+                                <div class="input-wrap">
+                                    <i class="bi bi-lock-fill input-icon"></i>
+                                    <!--
+                                        confirm_password is NOT sent to PHP (no name attr) —
+                                        it's only used by JS validateRegister() to check match.
+                                        PHP only needs 'password'.
+                                    -->
+                                    <input type="password" id="regConfirm"
+                                           class="field-input" placeholder="Repeat password">
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
-                <div class="field-group mb-3">
-                    <label class="field-label text-accent"><i class="bi bi-stars me-1"></i>Generated NU Email</label>
-                    <div class="input-wrap">
-                        <i class="bi bi-envelope-check input-icon"></i>
-                        <input type="text" id="regEmail" class="field-input" readonly placeholder="Auto-generated from your name">
-                    </div>
-                </div>
-                <div class="row g-2 mb-3">
-                    <div class="col-7">
-                        <div class="field-group">
-                            <label class="field-label">Course</label>
-                            <div class="input-wrap">
-                                <i class="bi bi-book input-icon"></i>
-                                <select id="regCourse" class="field-input field-select">
-                                    <option value="" disabled selected>Select Course</option>
-                                    <optgroup label="SECA">
-                                        <option>BS Architecture (BSArch)</option>
-                                        <option>BS Civil Engineering (BSCE)</option>
-                                        <option>BS Computer Engineering (BSCpE)</option>
-                                        <option>BS Computer Science - ML (BSCS-ML)</option>
-                                        <option>BSIT - MWA</option>
-                                    </optgroup>
-                                    <optgroup label="SBMA">
-                                        <option>BS Accountancy</option>
-                                        <option>BSBA - Financial Management</option>
-                                        <option>BSBA - Human Resource Management</option>
-                                        <option>BSBA - Marketing Management</option>
-                                        <option>BS Hospitality Management (BSHM)</option>
-                                        <option>BS Management Accounting (BSMA)</option>
-                                    </optgroup>
-                                    <optgroup label="SASE">
-                                        <option>BA in Communication (ABComm)</option>
-                                        <option>Bachelor of Physical Education (BPEd)</option>
-                                        <option>BS in Psychology (BSPSY)</option>
-                                    </optgroup>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-5">
-                        <div class="field-group">
-                            <label class="field-label">Year Level</label>
-                            <div class="input-wrap">
-                                <i class="bi bi-calendar3 input-icon"></i>
-                                <select id="regYear" class="field-input field-select">
-                                    <option value="" disabled selected>Select</option>
-                                    <option>1st Year</option>
-                                    <option>2nd Year</option>
-                                    <option>3rd Year</option>
-                                    <option>4th Year</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="row g-2 mb-4">
-                    <div class="col-6">
-                        <div class="field-group">
-                            <label class="field-label">Password</label>
-                            <div class="input-wrap">
-                                <i class="bi bi-lock input-icon"></i>
-                                <input type="password" id="regPass" class="field-input" placeholder="Create password">
-                                <button class="toggle-pass" onclick="togglePass('regPass', this)" tabindex="-1"><i class="bi bi-eye"></i></button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <div class="field-group">
-                            <label class="field-label">Confirm Password</label>
-                            <div class="input-wrap">
-                                <i class="bi bi-lock-fill input-icon"></i>
-                                <input type="password" id="regConfirm" class="field-input" placeholder="Repeat password">
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <button class="btn-success-cta w-100 mb-2" onclick="registerUser()"><i class="bi bi-person-check-fill me-2"></i>Create My Account</button>
-                <button class="btn-ghost w-100" onclick="showLogin()"><i class="bi bi-arrow-left me-1"></i>Back to Login</button>
+
+                    <!-- type="submit" so the form actually POSTs to register.php after JS validation -->
+                    <button type="submit" class="btn-success-cta w-100 mb-2">
+                        <i class="bi bi-person-check-fill me-2"></i>Create My Account
+                    </button>
+                </form>
+
+                <button type="button" class="btn-ghost w-100 mt-1" onclick="showLogin()">
+                    <i class="bi bi-arrow-left me-1"></i>Back to Login
+                </button>
             </div>
 
             <!-- FORGOT PASSWORD -->
             <div id="forgot-section" class="auth-form-card d-none">
                 <h2 class="form-card-title">Reset Password</h2>
                 <p class="form-card-sub">Recover your account access</p>
-                <div class="info-banner mb-4"><i class="bi bi-info-circle-fill me-2"></i>Enter your registered NU email and we'll send a verification code.</div>
+                <div class="info-banner mb-4"><i class="bi bi-info-circle-fill me-2"></i>Enter the <strong>personal Gmail</strong> you registered with and we'll send a 6-digit verification code.</div>
                 <div class="field-group mb-4">
-                    <label class="field-label">Registered NU Email</label>
+                    <label class="field-label"><i class="bi bi-google me-1"></i>Personal Gmail Address</label>
                     <div class="input-wrap">
-                        <i class="bi bi-envelope input-icon"></i>
-                        <input type="email" id="forgotEmail" class="field-input" placeholder="e.g. sfbayona@nu-dasma.edu.ph">
+                        <i class="bi bi-envelope-at input-icon"></i>
+                        <input type="email" id="forgotEmail" class="field-input" placeholder="yourname@gmail.com">
                     </div>
                 </div>
                 <button class="btn-primary-cta w-100 mb-3" onclick="processReset()"><i class="bi bi-send-fill me-2"></i>Send Verification Code</button>
@@ -349,6 +445,7 @@
                 <a class="sidebar-link" id="nav-candidates" onclick="switchAdminTab('candidates')"><i class="bi bi-people-fill"></i><span>Candidates</span></a>
                 <a class="sidebar-link" id="nav-results" onclick="switchAdminTab('results')"><i class="bi bi-bar-chart-fill"></i><span>Results</span></a>
                 <a class="sidebar-link" id="nav-archive" onclick="switchAdminTab('archive')"><i class="bi bi-archive-fill"></i><span>Archive</span></a>
+                <a class="sidebar-link" id="nav-voters" onclick="switchAdminTab('voters')"><i class="bi bi-people-fill"></i><span>Voter Tracker</span></a>
             </nav>
             <button class="sidebar-logout" onclick="showAuthPage()"><i class="bi bi-box-arrow-left me-2"></i>Logout</button>
         </aside>
@@ -477,6 +574,41 @@
                     </div>
                 </div>
                 <div id="archive-list"></div>
+            </div>
+
+            <!-- VOTER TRACKER TAB -->
+            <div id="tab-voters" class="admin-tab d-none">
+                <div class="admin-page-header">
+                    <div>
+                        <h1 class="admin-page-title">Voter Tracker</h1>
+                        <p class="admin-page-sub">See which registered students have cast their vote.</p>
+                    </div>
+                    <button class="btn-outline-sm" onclick="fetchVoterData()"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button>
+                </div>
+
+                <!-- Summary bar -->
+                <div class="tracker-summary-bar" id="voter-tracker-summary"></div>
+
+                <!-- Filter / search row -->
+                <div class="tracker-controls">
+                    <div class="input-wrap" style="max-width:280px;">
+                        <i class="bi bi-search input-icon"></i>
+                        <input type="text" id="tracker-search" class="field-input"
+                               placeholder="Search name or ID…"
+                               oninput="fetchVoterData()">
+                    </div>
+                    <select id="tracker-status-filter" class="field-input field-select tracker-filter-select" onchange="fetchVoterData()">
+                        <option value="all">All Voters</option>
+                        <option value="voted">Voted</option>
+                        <option value="not_voted">Not Yet Voted</option>
+                    </select>
+                    <select id="tracker-election-filter" class="field-input field-select tracker-filter-select" onchange="fetchVoterData()">
+                        <option value="">All Elections</option>
+                    </select>
+                </div>
+
+                <!-- Table -->
+                <div id="voter-tracker-table-wrap" class="tracker-table-wrap"></div>
             </div>
         </main>
     </div>
