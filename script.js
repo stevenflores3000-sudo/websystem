@@ -27,7 +27,6 @@ function getUpcomingElections() { return elections.filter(e => e.status === 'upc
 function getClosedElections()   { return elections.filter(e => (e.status === 'closed' || e.archived)); }
 
 function escapeHtml(str) {
-    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
@@ -71,19 +70,64 @@ function toggleAuthForms(show) {
 
 // Voter portal sub-sections
 function showVoterDashboard() {
-    ['voter-dashboard','ballot-section','success-section'].forEach(id => {
-        document.getElementById(id).classList.add('d-none');
+    ['voter-dashboard','ballot-section','success-section','receipt-section'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('d-none');
     });
-    document.getElementById('voter-dashboard').classList.remove('d-none');
+    const dash = document.getElementById('voter-dashboard');
+    if (dash) dash.classList.remove('d-none');
     buildVoterDashboard();
 }
 
 function showBallot() {
-    ['voter-dashboard','ballot-section','success-section'].forEach(id => {
-        document.getElementById(id).classList.add('d-none');
+    ['voter-dashboard','ballot-section','success-section','receipt-section'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('d-none');
     });
-    document.getElementById('ballot-section').classList.remove('d-none');
+    const ballot = document.getElementById('ballot-section');
+    if (ballot) ballot.classList.remove('d-none');
     buildBallot();
+}
+
+async function showReceipt(elecId) {
+    ['voter-dashboard','ballot-section','success-section','receipt-section'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('d-none');
+    });
+    const receiptSec = document.getElementById('receipt-section');
+    if (receiptSec) receiptSec.classList.remove('d-none');
+    
+    const content = document.getElementById('receipt-content');
+    if (content) {
+        content.innerHTML = '<div style="text-align:center; padding:2rem;"><i class="bi bi-arrow-repeat spin me-2"></i>Loading receipt...</div>';
+        
+        try {
+            const res = await fetch(`get_stats.php?section=receipt&election_id=${encodeURIComponent(elecId)}`);
+            const data = await res.json();
+            
+            if (data.success && data.receipt) {
+                if (data.receipt.length === 0) {
+                    content.innerHTML = '<div style="text-align:center; color:var(--danger);">No votes found for this election.</div>';
+                    return;
+                }
+                content.innerHTML = data.receipt.map(r => `
+                    <div style="border-bottom:1px solid var(--border-light); padding:1rem 0; display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <div style="font-size:0.75rem; color:var(--text-light); text-transform:uppercase; letter-spacing:1px; margin-bottom:4px;">${escapeHtml(r.position)}</div>
+                            <div style="font-weight:600; color:var(--text-dark); font-size:1.1rem;">${escapeHtml(r.candidate)}</div>
+                        </div>
+                        <div style="text-align:right;">
+                            <span style="background:var(--bg-light); padding:4px 10px; border-radius:6px; font-size:0.75rem; color:var(--text-mid); border:1px solid var(--border-light); font-weight:600;">${escapeHtml(r.party)}</span>
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                content.innerHTML = `<div style="text-align:center; color:var(--danger);">${escapeHtml(data.error || 'Failed to load receipt.')}</div>`;
+            }
+        } catch (err) {
+            content.innerHTML = '<div style="text-align:center; color:var(--danger);">Network error. Could not load receipt.</div>';
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════
@@ -348,6 +392,23 @@ function buildVoterDashboard() {
     document.getElementById('voter-period-close').textContent   = `Voting closes on ${formatDate(elec.endDate)}`;
     document.getElementById('portal-election-title').textContent = elec.name;
 
+    const statusBadge = document.getElementById('voter-status-badge');
+    if (statusBadge) {
+        if (elec.voted) {
+            statusBadge.className = 'voter-status-badge voted';
+            statusBadge.innerHTML = '<i class="bi bi-check-circle-fill"></i> Voted';
+            statusBadge.style.background = 'rgba(16, 185, 129, 0.1)';
+            statusBadge.style.color = '#10b981';
+            statusBadge.style.border = '1px solid rgba(16, 185, 129, 0.2)';
+        } else {
+            statusBadge.className = 'voter-status-badge';
+            statusBadge.innerHTML = '<i class="bi bi-check-circle-fill"></i> Eligible to Vote';
+            statusBadge.style.background = 'rgba(10, 88, 202, 0.1)';
+            statusBadge.style.color = '#0a58ca';
+            statusBadge.style.border = 'none';
+        }
+    }
+
     const others = active.filter(e => e.id !== currentElectionId);
     if (others.length > 0) {
         const sec = document.getElementById('other-elections-section');
@@ -391,14 +452,20 @@ function updateVoteButtonState(elec) {
     const voteBtn = document.getElementById('voter-vote-btn');
     if (!voteBtn) return;
     if (elec && elec.voted) {
-        voteBtn.disabled = true;
-        voteBtn.innerHTML = '<i class="bi bi-check-circle-fill me-2"></i>Already Voted';
-        voteBtn.style.cursor = 'not-allowed';
-        voteBtn.onclick = null;
+        voteBtn.disabled = false;
+        voteBtn.innerHTML = '<i class="bi bi-receipt me-2"></i>View Receipt';
+        voteBtn.className = 'btn-outline-sm';
+        voteBtn.style.cursor = 'pointer';
+        voteBtn.style.width = 'fit-content';
+        voteBtn.style.padding = '0.75rem 1.5rem';
+        voteBtn.onclick = () => showReceipt(elec.id);
     } else {
         voteBtn.disabled = false;
         voteBtn.innerHTML = '<i class="bi bi-check2-square me-2"></i>Vote Now';
+        voteBtn.className = 'btn-vote-now';
         voteBtn.style.cursor = 'pointer';
+        voteBtn.style.width = '';
+        voteBtn.style.padding = '';
         voteBtn.onclick = showBallot;
     }
 }
@@ -519,7 +586,7 @@ function updateBallotProgress(elec) {
     }
 }
 
-async function submitVote() {
+function showVoteConfirmModal() {
     const elec = getElection(currentElectionId);
     if (!elec) return;
 
@@ -529,7 +596,54 @@ async function submitVote() {
         return;
     }
 
-    document.getElementById('submit-btn').disabled = true;
+    const listContainer = document.getElementById('vote-confirm-list');
+    let html = '';
+    // Generate the receipt summary visually linking positions to the chosen candidate
+    const positions = getAllPositions(elec);
+    positions.forEach(pos => {
+        const key = getPositionKey(pos);
+        const candId = votes[key];
+        if (!candId) return;
+
+        let candName = 'Unknown';
+        let partyName = 'Unknown';
+        elec.partyLists.forEach(p => {
+            const c = p.candidates.find(cand => cand.id === candId);
+            if (c) {
+                candName = c.name;
+                partyName = p.name;
+            }
+        });
+
+        html += `
+        <div style="border-bottom:1px solid var(--border-light); padding:0.75rem 0; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <div style="font-size:0.75rem; color:var(--text-light); text-transform:uppercase; letter-spacing:1px; margin-bottom:2px;">${escapeHtml(pos)}</div>
+                <div style="font-weight:600; color:var(--text-dark); font-size:1rem;">${escapeHtml(candName)}</div>
+            </div>
+            <div style="text-align:right;">
+                <span style="background:var(--bg-light); padding:4px 8px; border-radius:6px; font-size:0.7rem; color:var(--text-mid); border:1px solid var(--border-light); font-weight:600;">${escapeHtml(partyName)}</span>
+            </div>
+        </div>`;
+    });
+
+    listContainer.innerHTML = html;
+    document.getElementById('vote-confirm-modal-overlay').classList.remove('d-none');
+}
+
+function closeVoteConfirmModal() {
+    document.getElementById('vote-confirm-modal-overlay').classList.add('d-none');
+}
+
+async function submitVote() {
+    const elec = getElection(currentElectionId);
+    if (!elec) return;
+
+    const submitBtn = document.getElementById('modal-submit-btn');
+    const cancelBtn = document.getElementById('modal-cancel-btn');
+    submitBtn.disabled = true;
+    cancelBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="bi bi-arrow-repeat spin me-1"></i>Submitting...';
 
     try {
         const response = await fetch('submit_vote.php', {
@@ -540,8 +654,15 @@ async function submitVote() {
                 candidate_ids: Object.values(votes)
             })
         });
-        const result = await response.json();
-
+        
+        const rawText = await response.text();
+        let result;
+        try {
+            result = JSON.parse(rawText);
+        } catch (parseErr) {
+            throw new Error("PHP Error: " + rawText.replace(/(<([^>]+)>)/gi, "").substring(0, 100));
+        }
+        
         if (result.success) {
             const now = new Date();
             const timeStr = now.toLocaleDateString('en-PH', { year:'numeric', month:'long', day:'numeric' })
@@ -553,19 +674,26 @@ async function submitVote() {
 
             elec.voted = true;
 
-            ['voter-dashboard','ballot-section','success-section'].forEach(id => {
-                document.getElementById(id).classList.add('d-none');
+            closeVoteConfirmModal();
+
+            ['voter-dashboard','ballot-section','success-section','receipt-section'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.classList.add('d-none');
             });
             document.getElementById('success-section').classList.remove('d-none');
             showToast('Vote submitted successfully!','success');
         } else {
             showToast(result.error || 'An error occurred.','error');
-            document.getElementById('submit-btn').disabled = false;
+            submitBtn.disabled = false;
+            cancelBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="bi bi-send-check-fill me-1"></i>Confirm & Submit';
         }
     } catch (err) {
         console.error('Vote submission error:', err);
-        showToast('A network error occurred. Please try again.','error');
-        document.getElementById('submit-btn').disabled = false;
+        showToast(err.message || 'A network error occurred.', 'error');
+        submitBtn.disabled = false;
+        cancelBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="bi bi-send-check-fill me-1"></i>Confirm & Submit';
     }
 }
 
@@ -743,7 +871,6 @@ async function fetchVoterData() {
                         <td class="tracker-name">${escapeHtml(v.name)}</td>
                         <td class="tracker-sid">${escapeHtml(v.student_id)}</td>
                         <td class="tracker-dept">${escapeHtml(v.department || '—')}</td>
-                        <td class="tracker-year">${v.year_level ? v.year_level + (v.year_level==='1'?'st':v.year_level==='2'?'nd':v.year_level==='3'?'rd':'th') + ' Yr' : '—'}</td>
                         <td class="tracker-year">${v.year_level ? escapeHtml(v.year_level) + (v.year_level==='1'?'st':v.year_level==='2'?'nd':v.year_level==='3'?'rd':'th') + ' Yr' : '—'}</td>
                         <td>
                             <span class="vote-status-badge ${v.has_voted ? 'voted' : 'not-voted'}">
@@ -785,42 +912,90 @@ function renderElectionsList() {
                 <option value="closed"   ${e.status==='closed'   ? 'selected' : ''}>Closed</option>
             </select>
             <div class="election-list-actions">
+                <button class="btn-icon-info"   onclick="showEditElectionModal('${e.id}')" title="Edit"><i class="bi bi-pencil-fill"></i></button>
                 <button class="btn-icon-info"   onclick="archiveElection('${e.id}')"  title="Archive"><i class="bi bi-archive"></i></button>
                 <button class="btn-icon-danger" onclick="deleteElection('${e.id}')"   title="Delete"><i class="bi bi-trash-fill"></i></button>
             </div>
         </div>`).join('');
 }
 
-function changeElectionStatus(elecId, newStatus) {
+async function changeElectionStatus(elecId, newStatus) {
     const elec = getElection(elecId);
     if (!elec) return;
-    elec.status = newStatus;
-    renderElectionsList();
-    renderOverview();
-    showToast(`Election status updated to "${newStatus}".`,'info');
-    updateAuthBadge();
+
+    try {
+        const res = await fetch('admin_api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'change_status', election_id: elecId, status: newStatus })
+        });
+        const data = await res.json();
+        if (data.success) {
+            elec.status = newStatus;
+            renderElectionsList();
+            renderOverview();
+            showToast(`Election status updated to "${newStatus}".`,'info');
+            updateAuthBadge();
+        } else {
+            showToast('Error updating status.', 'error');
+        }
+    } catch (err) {
+        showToast('Network error.', 'error');
+    }
 }
 
-function archiveElection(elecId) {
+async function archiveElection(elecId) {
     const elec = getElection(elecId);
     if (!elec) return;
     if (!confirm(`Archive "${elec.name}"? It will be moved to the Archive tab.`)) return;
-    elec.archived = true;
-    elec.status   = 'closed';
-    renderElectionsList();
-    showToast(`"${elec.name}" archived.`,'info');
-    updateAuthBadge();
+    
+    try {
+        const res = await fetch('admin_api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'change_status', election_id: elecId, status: 'archived' })
+        });
+        const data = await res.json();
+        if (data.success) {
+            elec.archived = true;
+            elec.status   = 'archived';
+            renderElectionsList();
+            renderOverview();
+            showToast(`"${elec.name}" archived.`,'info');
+            updateAuthBadge();
+        } else {
+            showToast('Error archiving election.', 'error');
+        }
+    } catch (err) {
+        showToast('Network error.', 'error');
+    }
 }
 
-function deleteElection(elecId) {
+async function deleteElection(elecId) {
     const elec = getElection(elecId);
     if (!elec) return;
     if (!confirm(`Permanently delete "${elec.name}"? This cannot be undone.`)) return;
-    const idx = elections.findIndex(e => e.id === elecId);
-    if (idx !== -1) elections.splice(idx, 1);
-    renderElectionsList();
-    showToast('Election deleted.','info');
-    updateAuthBadge();
+    
+    try {
+        const res = await fetch('admin_api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_election', election_id: elecId })
+        });
+        const data = await res.json();
+        if (data.success) {
+            const idx = elections.findIndex(e => e.id === elecId);
+            if (idx !== -1) elections.splice(idx, 1);
+            renderElectionsList();
+            renderOverview();
+            showToast('Election deleted.','info');
+            updateAuthBadge();
+        } else {
+            showToast('Error deleting election.', 'error');
+        }
+    } catch (err) {
+        showToast('Network error.', 'error');
+    }
 }
 
 // ── Add Election Modal ──────────────────
@@ -838,7 +1013,7 @@ function closeElectionModal() {
     document.getElementById('election-modal-overlay').classList.add('d-none');
 }
 
-function addElection() {
+async function addElection() {
     const name   = document.getElementById('newElectionName').value.trim();
     const start  = document.getElementById('newElectionStart').value;
     const end    = document.getElementById('newElectionEnd').value;
@@ -853,18 +1028,76 @@ function addElection() {
         showToast('An election with that name already exists.','error'); return;
     }
 
-    elections.push({
-        id: 'elec-' + Date.now(),
-        name, startDate: start, endDate: end,
-        eligibleVoters: voters, status, archived: false,
-        partyLists: [], customPositions: ['President','Vice President','Secretary'],
-        voteTallies: {}, archivedTallies: []
-    });
+    const btn = document.querySelector('#election-modal-overlay .btn-primary-cta');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="bi bi-arrow-repeat spin me-1"></i>Creating...';
+    }
 
-    closeElectionModal();
-    renderElectionsList();
-    showToast(`"${name}" created!`,'success');
-    updateAuthBadge();
+    try {
+        const res = await fetch('admin_api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'add_election', name, start_date: start, status })
+        });
+        const data = await res.json();
+        if (data.success) {
+            await loadElectionsFromDB();
+            closeElectionModal();
+            renderElectionsList();
+            showToast(`"${name}" created!`,'success');
+            updateAuthBadge();
+        } else {
+            showToast('Error: ' + data.error, 'error');
+        }
+    } catch (err) {
+        showToast('Network error.', 'error');
+    }
+}
+
+// ── Edit Election Modal ─────────────────
+function showEditElectionModal(elecId) {
+    const elec = getElection(elecId);
+    if (!elec) return;
+    document.getElementById('editElectionId').value = elec.id;
+    document.getElementById('editElectionName').value = elec.name;
+    document.getElementById('editElectionDate').value = elec.startDate;
+    document.getElementById('edit-election-modal-overlay').classList.remove('d-none');
+    setTimeout(() => document.getElementById('editElectionName').focus(), 50);
+}
+
+function closeEditElectionModal() {
+    document.getElementById('edit-election-modal-overlay').classList.add('d-none');
+}
+
+async function saveEditElection() {
+    const id   = document.getElementById('editElectionId').value;
+    const name = document.getElementById('editElectionName').value.trim();
+    const date = document.getElementById('editElectionDate').value;
+
+    if (!name) { showToast('Please enter an election name.','error'); return; }
+    if (!date) { showToast('Please enter an election date.','error'); return; }
+
+    try {
+        const res = await fetch('admin_api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'edit_election', election_id: id, name, date })
+        });
+        const data = await res.json();
+        if (data.success) {
+            await loadElectionsFromDB();
+            closeEditElectionModal();
+            renderElectionsList();
+            renderOverview();
+            showToast('Election updated successfully!', 'success');
+            updateAuthBadge();
+        } else {
+            showToast('Error updating election.', 'error');
+        }
+    } catch (err) {
+        showToast('Network error.', 'error');
+    }
 }
 
 // ══════════════════════════════════════════════════════
@@ -949,7 +1182,7 @@ function showAddPositionForm() {
     if (!form.classList.contains('d-none')) document.getElementById('newPositionName').focus();
 }
 
-function addCustomPosition() {
+async function addCustomPosition() {
     const elecId = document.getElementById('cand-election-filter').value;
     const elec   = getElection(elecId);
     if (!elec)  { showToast('Please select an election first.','error'); return; }
@@ -959,15 +1192,36 @@ function addCustomPosition() {
     if (elec.customPositions.some(p => p.toLowerCase() === name.toLowerCase())) {
         showToast('Position already exists.','error'); return;
     }
-    elec.customPositions.push(name);
-    input.value = '';
-    document.getElementById('add-position-form').classList.add('d-none');
-    renderPositionManager(elec);
-    renderPositionDropdowns(elec);
-    showToast(`Position "${name}" added!`,'success');
+    
+    const btn = document.querySelector('#add-position-form .btn-primary-sm');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="bi bi-arrow-repeat spin me-1"></i>...'; }
+
+    try {
+        const res = await fetch('admin_api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'add_position', election_id: elecId, title: name })
+        });
+        const data = await res.json();
+        if (data.success) {
+            await loadElectionsFromDB();
+            const updatedElec = getElection(elecId);
+            input.value = '';
+            document.getElementById('add-position-form').classList.add('d-none');
+            renderPositionManager(updatedElec);
+            renderPositionDropdowns(updatedElec);
+            showToast(`Position "${name}" added!`,'success');
+        } else {
+            showToast(data.error || 'Error adding position.', 'error');
+        }
+    } catch (err) {
+        showToast('Network error.', 'error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-plus-lg me-1"></i>Add'; }
+    }
 }
 
-function deletePosition(elecId, idx) {
+async function deletePosition(elecId, idx) {
     const elec = getElection(elecId);
     if (!elec) return;
     const pos = elec.customPositions[idx];
@@ -975,10 +1229,26 @@ function deletePosition(elecId, idx) {
         showToast(`Cannot remove "${pos}" — candidates are assigned to it.`,'error'); return;
     }
     if (!confirm(`Remove position "${pos}"?`)) return;
-    elec.customPositions.splice(idx, 1);
-    renderPositionManager(elec);
-    renderPositionDropdowns(elec);
-    showToast(`Position "${pos}" removed.`,'info');
+    
+    try {
+        const res = await fetch('admin_api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_position', election_id: elecId, title: pos })
+        });
+        const data = await res.json();
+        if (data.success) {
+            await loadElectionsFromDB();
+            const updatedElec = getElection(elecId);
+            renderPositionManager(updatedElec);
+            renderPositionDropdowns(updatedElec);
+            showToast(`Position "${pos}" removed.`,'info');
+        } else {
+            showToast(data.error || 'Error removing position.', 'error');
+        }
+    } catch (err) {
+        showToast('Network error.', 'error');
+    }
 }
 
 function renderPositionDropdowns(elec) {
@@ -1002,7 +1272,7 @@ function closePartyModal() {
     document.getElementById('party-modal-overlay').classList.add('d-none');
 }
 
-function addParty() {
+async function addParty() {
     const elecId = document.getElementById('cand-election-filter').value;
     const elec   = getElection(elecId);
     if (!elec)   { showToast('No election selected.','error'); return; }
@@ -1011,11 +1281,38 @@ function addParty() {
     if (elec.partyLists.some(p => p.name.toLowerCase() === name.toLowerCase())) {
         showToast('A party with that name already exists.','error'); return;
     }
-    elec.partyLists.push({ id: 'party-' + Date.now(), name, candidates: [] });
-    closePartyModal();
-    renderCandidatesTab();
-    populatePartyDropdown(elec);
-    showToast(`"${name}" added!`,'success');
+
+    const btn = document.querySelector('#party-modal-overlay .btn-primary-cta');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="bi bi-arrow-repeat spin me-1"></i>Creating...';
+    }
+
+    try {
+        const res = await fetch('admin_api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'add_party', name })
+        });
+        const data = await res.json();
+        if (data.success) {
+            // Temporarily push to UI array so you can immediately select it to add candidates
+            elec.partyLists.push({ id: data.party_id, name, candidates: [] });
+            closePartyModal();
+            renderCandidatesTab();
+            populatePartyDropdown(elec);
+            showToast(`"${name}" added!`,'success');
+        } else {
+            showToast(data.error || 'Error adding party.', 'error');
+        }
+    } catch (err) {
+        showToast('Network error.', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-plus-lg me-1"></i>Create Party';
+        }
+    }
 }
 
 async function deleteParty(elecId, partyId) {
@@ -1082,6 +1379,12 @@ async function addCandidate() {
         showToast(`${party.name} already has a candidate for ${position}.`,'error'); return;
     }
 
+    const btn = document.querySelector('#candidate-form .btn-success-sm');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="bi bi-arrow-repeat spin me-1"></i>Adding...';
+    }
+
     try {
         const res = await fetch('admin_api.php', {
             method: 'POST',
@@ -1097,10 +1400,15 @@ async function addCandidate() {
             renderCandidatesTab();
             showToast(`${name} added as ${position}!`, 'success');
         } else {
-            showToast('Error: ' + data.error, 'error');
+            showToast(data.error || 'Error adding candidate.', 'error');
         }
     } catch (err) {
         showToast('Network error.', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-person-check-fill me-1"></i>Add';
+        }
     }
 }
 
@@ -1162,13 +1470,17 @@ function startEditCandidate(elecId, partyId, candId) {
     });
 }
 
-y   const elec  = getElection(elecId);
+async function saveEditCandidate(elecId, partyId, candId) {
+    const elec  = getElection(elecId);
     const party = elec?.partyLists.find(p => p.id === partyId);
     const cand  = party?.candidates.find(c => c.id === candId);
     if (!cand) return;
     const newName = document.getElementById(`edit-input-${candId}`)?.value.trim();
     if (!newName) { showToast('Name cannot be empty.','error'); return; }
-        
+
+    try {
+        const res = await fetch('admin_api.php', {
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'edit_candidate', candidate_id: candId, name: newName })
         });
@@ -1446,17 +1758,25 @@ async function loadElectionsFromDB() {
         const data     = await response.json();
 
         if (data.success && Array.isArray(data.elections)) {
+
             elections = data.elections.map(e => {
                 let partyMap    = {};
                 let voteTallies = {};
                 const customPositions = Object.keys(e.positions || {});
+
+                // Pre-fill parties directly from the database to retain true IDs
+                if (data.parties) {
+                    data.parties.forEach(p => {
+                        partyMap[p.name] = { id: p.id, name: p.name, candidates: [] };
+                    });
+                }
 
                 for (const [posName, candidates] of Object.entries(e.positions || {})) {
                     candidates.forEach(c => {
                         const partyName = c.party || 'Independent';
                         if (!partyMap[partyName]) {
                             partyMap[partyName] = {
-                                id: 'party-' + partyName.replace(/\s+/g,'-').toLowerCase(),
+                                id: c.party_id || ('party-' + partyName.replace(/\s+/g,'-').toLowerCase()),
                                 name: partyName,
                                 candidates: []
                             };
@@ -1477,7 +1797,8 @@ async function loadElectionsFromDB() {
                     endDate:        e.date ? e.date.split(' ')[0] : '',
                     eligibleVoters: e.eligible_voters || 0,
                     status:         e.status || 'active',
-                    archived:       e.status === 'closed',
+                    archived:       e.status === 'archived',
+                    voted:          e.user_voted || false,
                     partyLists:     Object.values(partyMap),
                     customPositions,
                     voteTallies,
@@ -1487,6 +1808,50 @@ async function loadElectionsFromDB() {
         }
     } catch (err) {
         console.error('Error loading elections from DB:', err);
+    }
+}
+
+// ══════════════════════════════════════════════════════
+//  ADMIN PASSWORD CHANGE
+// ══════════════════════════════════════════════════════
+function showAdminPasswordModal() {
+    document.getElementById('adminOldPass').value = '';
+    document.getElementById('adminNewPass').value = '';
+    document.getElementById('adminConfirmPass').value = '';
+    document.getElementById('admin-password-modal-overlay').classList.remove('d-none');
+}
+
+function closeAdminPasswordModal() {
+    document.getElementById('admin-password-modal-overlay').classList.add('d-none');
+}
+
+async function saveAdminPassword() {
+    const oldPass = document.getElementById('adminOldPass').value;
+    const newPass = document.getElementById('adminNewPass').value;
+    const confirmPass = document.getElementById('adminConfirmPass').value;
+
+    if (!oldPass) { showToast('Enter your current password.', 'error'); return; }
+    if (newPass.length < 6) { showToast('New password must be at least 6 characters.', 'error'); return; }
+    if (newPass !== confirmPass) { showToast('New passwords do not match.', 'error'); return; }
+
+    try {
+        const res = await fetch('admin_api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'change_password', old_password: oldPass, new_password: newPass })
+        });
+        const data = await res.json();
+        if (data.success) {
+            closeAdminPasswordModal();
+            showToast('Password updated successfully! Please log in again.', 'success');
+            setTimeout(() => {
+                showAuthPage(); // Logs the user out on the client side
+            }, 1500);
+        } else {
+            showToast('Error: ' + data.error, 'error');
+        }
+    } catch (err) {
+        showToast('Network error.', 'error');
     }
 }
 

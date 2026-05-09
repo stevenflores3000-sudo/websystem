@@ -21,6 +21,12 @@ if (!isset($_SESSION['user_id'])) {
     exit();
 }
 
+// Prevent administrators from casting votes
+if (isset($_SESSION['role']) && $_SESSION['role'] === 'admin') {
+    echo json_encode(['success' => false, 'error' => 'Administrators are not permitted to cast votes.']);
+    exit();
+}
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     echo json_encode(['success' => false, 'error' => 'Invalid request method.']);
     exit();
@@ -38,29 +44,61 @@ if (empty($election_id) || empty($candidate_ids) || !is_array($candidate_ids)) {
     exit();
 }
 
-// 3. Check if the user has already voted in this election
-$stmt = $conn->prepare("SELECT COUNT(*) FROM votes WHERE user_id = ? AND election_id = ?");
-$stmt->bind_param('ss', $user_id, $election_id);
-$stmt->execute();
-$stmt->bind_result($vote_count);
-$stmt->fetch();
-$stmt->close();
-
-if ($vote_count > 0) {
-    echo json_encode(['success' => false, 'error' => 'You have already voted in this election.']);
-    exit();
-}
-
-// 4. Start a transaction and insert votes
-$conn->begin_transaction();
-
 try {
-    $stmt = $conn->prepare("INSERT INTO votes (user_id, election_id, candidate_id) VALUES (?, ?, ?)");
+    // 3. Check if the user has already voted in this election
+    $stmt = $conn->prepare("SELECT COUNT(*) FROM vote WHERE user_id = ? AND election_id = ?");
+    if (!$stmt) { throw new Exception("Prepare failed: " . $conn->error); }
+    
+    $stmt->bind_param('ss', $user_id, $election_id);
+    $stmt->execute();
+    $stmt->bind_result($vote_count);
+    $stmt->fetch();
+    $stmt->close();
 
-    foreach ($candidate_ids as $candidate_id) {
-        $stmt->bind_param('sss', $user_id, $election_id, $candidate_id);
-        if (!$stmt->execute()) {
-            throw new Exception($stmt->error); // Trigger rollback
+    if ($vote_count > 0) {
+        echo json_encode(['success' => false, 'error' => 'You have already voted in this election.']);
+        exit();
+    }
+
+    // 3.5. Ensure the database allows multi-candidate ballots. 
+    // The 'unique_voter' key prevents inserting multiple candidates per election.
+    $checkIdx = $conn->query("SHOW INDEX FROM vote WHERE Key_name = 'unique_voter'");
+    if ($checkIdx && $checkIdx->num_rows > 0) {
+        try {
+            $conn->query("ALTER TABLE vote DROP INDEX unique_voter");
+        } catch (Exception $idxEx) {
+            throw new Exception("Could not automatically remove the restrictive unique_voter rule. Please open phpMyAdmin, select your database, go to the SQL tab, and run: ALTER TABLE vote DROP INDEX unique_voter;");
+        }
+    }
+
+    // 4. Start a transaction and insert votes
+    // (Moved inside the try block so any fatal exceptions are safely caught and returned as JSON)
+    $conn->begin_transaction();
+
+    // Dynamically check if the 'vote' table requires a manual VARCHAR ID (missing AUTO_INCREMENT)
+    $checkId = $conn->query("SHOW COLUMNS FROM vote LIKE 'id'");
+    $requires_manual_id = false;
+    if ($checkId && $checkId->num_rows > 0) {
+        $col = $checkId->fetch_assoc();
+        if (stripos($col['Extra'], 'auto_increment') === false && stripos($col['Type'], 'int') === false) {
+            $requires_manual_id = true;
+        }
+    }
+
+    if ($requires_manual_id) {
+        $stmt = $conn->prepare("INSERT INTO vote (id, user_id, election_id, candidate_id) VALUES (?, ?, ?, ?)");
+        if (!$stmt) { throw new Exception("Prepare failed: " . $conn->error); }
+        foreach ($candidate_ids as $candidate_id) {
+            $vote_id = 'V-' . mt_rand(100000, 999999);
+            $stmt->bind_param('ssss', $vote_id, $user_id, $election_id, $candidate_id);
+            if (!$stmt->execute()) { throw new Exception("Insert failed: " . $stmt->error); }
+        }
+    } else {
+        $stmt = $conn->prepare("INSERT INTO vote (user_id, election_id, candidate_id) VALUES (?, ?, ?)");
+        if (!$stmt) { throw new Exception("Prepare failed: " . $conn->error); }
+        foreach ($candidate_ids as $candidate_id) {
+            $stmt->bind_param('sss', $user_id, $election_id, $candidate_id);
+            if (!$stmt->execute()) { throw new Exception("Insert failed: " . $stmt->error); }
         }
     }
     $stmt->close();
@@ -69,9 +107,12 @@ try {
     echo json_encode(['success' => true, 'message' => 'Vote submitted successfully.']);
 
 } catch (Exception $e) {
-    $conn->rollback();
+    if (isset($conn) && $conn->ping()) {
+        $conn->rollback();
+    }
     error_log("Vote submission failed for user_id {$user_id}: " . $e->getMessage());
-    echo json_encode(['success' => false, 'error' => 'A database error occurred. Your vote was not saved.']);
+    // Surface the EXACT database error to the UI for clear debugging
+    echo json_encode(['success' => false, 'error' => 'DB Error: ' . $e->getMessage()]);
 }
 
 $conn->close();

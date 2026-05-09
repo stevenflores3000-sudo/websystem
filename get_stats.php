@@ -38,7 +38,7 @@ $out = ['success' => true];
 // ══════════════════════════════════════════════════════════════════════
 if ($section === 'all' || $section === 'summary') {
     // Total registered voters
-    $r = $conn->query("SELECT COUNT(*) AS cnt FROM user");
+    $r = $conn->query("SELECT COUNT(*) AS cnt FROM user WHERE id NOT LIKE 'CAND-%'");
     $total_users = (int)$r->fetch_assoc()['cnt'];
 
     // Total unique votes (one row per user-election-candidate tuple)
@@ -46,7 +46,7 @@ if ($section === 'all' || $section === 'summary') {
     $total_votes = (int)$r->fetch_assoc()['cnt'];
 
     // Unique voters (users who cast ≥1 vote)
-    $r = $conn->query("SELECT COUNT(DISTINCT user_id) AS cnt FROM vote");
+    $r = $conn->query("SELECT COUNT(DISTINCT user_id) AS cnt FROM vote WHERE user_id NOT LIKE 'CAND-%'");
     $unique_voters = (int)$r->fetch_assoc()['cnt'];
 
     // Election status breakdown
@@ -86,6 +86,7 @@ if ($section === 'all' || $section === 'voter_tracker') {
              LEFT JOIN (
                  SELECT DISTINCT user_id FROM vote WHERE election_id = ?
              ) v ON v.user_id = u.id
+             WHERE u.id NOT LIKE 'CAND-%'
              ORDER BY u.name"
         );
         $stmt->bind_param('s', $election_id);
@@ -98,6 +99,7 @@ if ($section === 'all' || $section === 'voter_tracker') {
              LEFT JOIN (
                  SELECT DISTINCT user_id FROM vote
              ) v ON v.user_id = u.id
+             WHERE u.id NOT LIKE 'CAND-%'
              ORDER BY u.name"
         );
     }
@@ -125,6 +127,16 @@ if ($section === 'all' || $section === 'voter_tracker') {
 // ══════════════════════════════════════════════════════════════════════
 if ($section === 'all' || $section === 'tally') {
 
+    // Fetch all global party lists to populate the real IDs on the frontend
+    $parties = [];
+    $p_res = $conn->query("SELECT id, name FROM partylist");
+    if ($p_res) {
+        while ($row = $p_res->fetch_assoc()) {
+            $parties[] = $row;
+        }
+    }
+    $out['parties'] = $parties;
+
     // Base election query
     if ($election_id) {
         $stmt = $conn->prepare("SELECT * FROM election WHERE id = ?");
@@ -135,15 +147,19 @@ if ($section === 'all' || $section === 'tally') {
         $elections_res = $conn->query("SELECT * FROM election ORDER BY date_of_election DESC");
     }
 
+    // Fetch eligible voters once to avoid N+1 query overhead inside the loop
+    $r = $conn->query("SELECT COUNT(*) AS cnt FROM user WHERE id NOT LIKE 'CAND-%'");
+    $global_eligible = (int)$r->fetch_assoc()['cnt'];
+
+    // Ensure position table exists before we try to select from it
+    $conn->query("CREATE TABLE IF NOT EXISTS election_position (id INT AUTO_INCREMENT PRIMARY KEY, election_id VARCHAR(50), title VARCHAR(100))");
+
     $elections_out = [];
 
     while ($elec = $elections_res->fetch_assoc()) {
         $eid = $elec['id'];
 
-        // Eligible voters for this election = total registered users
-        // (adjust this query if you have a per-election eligible_voters column)
-        $r = $conn->query("SELECT COUNT(*) AS cnt FROM user");
-        $eligible = (int)$r->fetch_assoc()['cnt'];
+        $eligible = $global_eligible;
 
         // Unique votes cast in this election
         $stmt2 = $conn->prepare(
@@ -154,11 +170,24 @@ if ($section === 'all' || $section === 'tally') {
         $votes_cast = (int)$stmt2->get_result()->fetch_assoc()['cnt'];
         $stmt2->close();
 
+        // Check if current user voted
+        $user_voted = false;
+        if (isset($_SESSION['user_id']) && ($_SESSION['role'] ?? '') === 'voter') {
+            $stmtV = $conn->prepare("SELECT 1 FROM vote WHERE election_id = ? AND user_id = ? LIMIT 1");
+            $stmtV->bind_param('ss', $eid, $_SESSION['user_id']);
+            $stmtV->execute();
+            if ($stmtV->get_result()->num_rows > 0) {
+                $user_voted = true;
+            }
+            $stmtV->close();
+        }
+
         // Candidates + vote counts grouped by position
         $stmt3 = $conn->prepare(
             "SELECT c.id AS candidate_id,
                     u.name AS candidate_name,
                     c.position_title,
+                    p.id AS party_id,
                     COALESCE(p.name, 'Independent') AS party_name,
                     COUNT(v.id) AS vote_count
              FROM candidate c
@@ -166,7 +195,7 @@ if ($section === 'all' || $section === 'tally') {
              LEFT JOIN partylist p ON p.id = c.party_id
              LEFT JOIN vote v ON v.candidate_id = c.id AND v.election_id = ?
              WHERE c.election_id = ?
-             GROUP BY c.id, u.name, c.position_title, p.name
+             GROUP BY c.id, u.name, c.position_title, p.id, p.name
              ORDER BY c.position_title, vote_count DESC"
         );
         $stmt3->bind_param('ss', $eid, $eid);
@@ -176,12 +205,24 @@ if ($section === 'all' || $section === 'tally') {
 
         // Group candidates into positions map
         $positions = [];
+        
+        // Pre-fill empty positions directly from the dedicated database table
+        $stmtP = $conn->prepare("SELECT title FROM election_position WHERE election_id = ?");
+        $stmtP->bind_param('s', $eid);
+        $stmtP->execute();
+        $resP = $stmtP->get_result();
+        while($pRow = $resP->fetch_assoc()) {
+            $positions[$pRow['title']] = [];
+        }
+        $stmtP->close();
+
         while ($cand = $cand_res->fetch_assoc()) {
             $pos = $cand['position_title'];
             if (!isset($positions[$pos])) $positions[$pos] = [];
             $positions[$pos][] = [
                 'candidate_id' => $cand['candidate_id'],
                 'name'         => $cand['candidate_name'],
+                'party_id'     => $cand['party_id'],
                 'party'        => $cand['party_name'],
                 'votes'        => (int)$cand['vote_count'],
             ];
@@ -197,11 +238,48 @@ if ($section === 'all' || $section === 'tally') {
             'eligible_voters' => $eligible,
             'votes_cast'      => $votes_cast,
             'turnout_pct'     => $turnout,
+            'user_voted'      => $user_voted,
             'positions'       => $positions,
         ];
     }
 
     $out['elections'] = $elections_out;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  4. VOTER RECEIPT
+//  Returns the candidates a specific user voted for in an election.
+// ══════════════════════════════════════════════════════════════════════
+if ($section === 'receipt') {
+    if (!isset($_SESSION['user_id']) || ($_SESSION['role'] ?? '') !== 'voter' || !$election_id) {
+        $out['success'] = false;
+        $out['error']   = 'Unauthorized or missing election ID.';
+    } else {
+        $user_id = $_SESSION['user_id'];
+        $stmt = $conn->prepare(
+            "SELECT c.position_title, u.name AS candidate_name, COALESCE(p.name, 'Independent') AS party_name
+             FROM vote v
+             JOIN candidate c ON v.candidate_id = c.id
+             JOIN user u ON c.user_id = u.id
+             LEFT JOIN partylist p ON c.party_id = p.id
+             WHERE v.election_id = ? AND v.user_id = ?
+             ORDER BY c.position_title"
+        );
+        $stmt->bind_param('ss', $election_id, $user_id);
+        $stmt->execute();
+        $res = $stmt->get_result();
+        
+        $receipt = [];
+        while ($row = $res->fetch_assoc()) {
+            $receipt[] = [
+                'position'  => $row['position_title'],
+                'candidate' => $row['candidate_name'],
+                'party'     => $row['party_name']
+            ];
+        }
+        $stmt->close();
+        $out['receipt'] = $receipt;
+    }
 }
 
 $conn->close();

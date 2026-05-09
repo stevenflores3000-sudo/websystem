@@ -367,7 +367,7 @@
                 <div class="voter-col-side">
                     <div class="voter-status-card">
                         <div class="voter-status-head"><i class="bi bi-shield-check"></i> Voting Status</div>
-                        <div class="voter-status-badge"><i class="bi bi-check-circle-fill"></i> Eligible to Vote</div>
+                        <div class="voter-status-badge" id="voter-status-badge"><i class="bi bi-check-circle-fill"></i> Eligible to Vote</div>
                         <div class="voter-status-id" id="voter-id-display">Student ID: —</div>
                     </div>
 
@@ -405,7 +405,7 @@
             <div id="ballot-positions-container"></div>
             <div class="ballot-submit-wrap">
                 <div class="submit-note" id="submit-note"><i class="bi bi-exclamation-triangle me-2"></i>Please select a candidate for all positions before submitting.</div>
-                <button class="btn-primary-cta" id="submit-btn" onclick="submitVote()" disabled style="width:280px;"><i class="bi bi-send-check-fill me-2"></i>Submit My Vote</button>
+                <button class="btn-primary-cta" id="submit-btn" onclick="showVoteConfirmModal()" disabled style="width:280px;"><i class="bi bi-send-check-fill me-2"></i>Submit My Vote</button>
             </div>
         </div>
     </div>
@@ -422,7 +422,29 @@
                 <div class="receipt-row" id="receipt-time"><span>Submitted</span><span>—</span></div>
             </div>
             <p class="success-note">Thank you for participating. Your vote is confidential and securely stored.</p>
-            <button class="btn-ghost" style="width:220px;" onclick="showVoterDashboard()"><i class="bi bi-house-fill me-2"></i>Return to Dashboard</button>
+            <button class="btn-ghost" style="width:220px; margin-bottom:10px;" onclick="showVoterDashboard()"><i class="bi bi-house-fill me-2"></i>Return to Dashboard</button>
+            <br>
+            <button class="btn-outline-sm" onclick="showReceipt(currentElectionId)"><i class="bi bi-receipt me-2"></i>View Ballot Receipt</button>
+        </div>
+    </div>
+
+    <!-- Receipt Section -->
+    <div id="receipt-section" class="d-none">
+        <div class="ballot-header-bar">
+            <button class="btn-ghost-sm" onclick="showVoterDashboard()"><i class="bi bi-arrow-left me-1"></i>Back to Dashboard</button>
+            <div class="ballot-header-title">My Ballot Receipt</div>
+            <div style="width:100px;"></div>
+        </div>
+        <div class="ballot-body" style="max-width:700px; margin: 2rem auto;">
+            <div class="voter-instructions-card mb-4" style="text-align:center; padding:3rem 2rem;">
+                <i class="bi bi-receipt" style="font-size:3rem; color:var(--nu-blue); margin-bottom:1rem; display:inline-block;"></i>
+                <h2 style="font-size:1.5rem; font-weight:700; color:var(--text-dark); margin-bottom:0.5rem;">Official Voting Receipt</h2>
+                <p style="color:var(--text-mid); font-size:0.9rem; margin-bottom:2rem;">Your ballot has been securely recorded. Below are your selections.</p>
+                
+                <div id="receipt-content" style="text-align:left;">
+                    <!-- Filled via JS -->
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -447,6 +469,7 @@
                 <a class="sidebar-link" id="nav-archive" onclick="switchAdminTab('archive')"><i class="bi bi-archive-fill"></i><span>Archive</span></a>
                 <a class="sidebar-link" id="nav-voters" onclick="switchAdminTab('voters')"><i class="bi bi-people-fill"></i><span>Voter Tracker</span></a>
             </nav>
+            <button class="sidebar-logout mb-2" style="background:rgba(255,255,255,0.05); color:var(--text-light); border-radius:12px; margin-bottom: 8px;" onclick="showAdminPasswordModal()"><i class="bi bi-key-fill me-2"></i>Change Password</button>
             <button class="sidebar-logout" onclick="showAuthPage()"><i class="bi bi-box-arrow-left me-2"></i>Logout</button>
         </aside>
 
@@ -667,6 +690,35 @@
     </div>
 </div>
 
+<!-- Edit Election Modal -->
+<div id="edit-election-modal-overlay" class="modal-overlay d-none" onclick="closeEditElectionModal()">
+    <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header-row">
+            <h3 class="modal-title"><i class="bi bi-pencil-square me-2"></i>Edit Election</h3>
+            <button class="modal-close" onclick="closeEditElectionModal()"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <input type="hidden" id="editElectionId">
+        <div class="row g-3 mb-3">
+            <div class="col-12">
+                <div class="field-group">
+                    <label class="field-label">Election Name</label>
+                    <div class="input-wrap"><i class="bi bi-award input-icon"></i><input type="text" id="editElectionName" class="field-input" placeholder="e.g. Student Council Elections 2026"></div>
+                </div>
+            </div>
+            <div class="col-12">
+                <div class="field-group">
+                    <label class="field-label">Election Date</label>
+                    <div class="input-wrap"><i class="bi bi-calendar input-icon"></i><input type="date" id="editElectionDate" class="field-input"></div>
+                </div>
+            </div>
+        </div>
+        <div class="d-flex gap-2">
+            <button class="btn-primary-cta flex-fill" onclick="saveEditElection()"><i class="bi bi-save me-1"></i>Save Changes</button>
+            <button class="btn-ghost flex-fill" onclick="closeEditElectionModal()">Cancel</button>
+        </div>
+    </div>
+</div>
+
 <!-- Add Party Modal -->
 <div id="party-modal-overlay" class="modal-overlay d-none" onclick="closePartyModal()">
     <div class="modal-box" onclick="event.stopPropagation()">
@@ -681,6 +733,52 @@
         <div class="d-flex gap-2">
             <button class="btn-primary-cta flex-fill" onclick="addParty()"><i class="bi bi-plus-lg me-1"></i>Create Party</button>
             <button class="btn-ghost flex-fill" onclick="closePartyModal()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- Change Admin Password Modal -->
+<div id="admin-password-modal-overlay" class="modal-overlay d-none" onclick="closeAdminPasswordModal()">
+    <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header-row">
+            <h3 class="modal-title"><i class="bi bi-key-fill me-2"></i>Change Password</h3>
+            <button class="modal-close" onclick="closeAdminPasswordModal()"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <div class="field-group mb-3">
+            <label class="field-label">Current Password</label>
+            <div class="input-wrap"><i class="bi bi-lock input-icon"></i><input type="password" id="adminOldPass" class="field-input" placeholder="Enter current password"></div>
+        </div>
+        <div class="field-group mb-3">
+            <label class="field-label">New Password</label>
+            <div class="input-wrap"><i class="bi bi-lock-fill input-icon"></i><input type="password" id="adminNewPass" class="field-input" placeholder="Min. 6 characters"></div>
+        </div>
+        <div class="field-group mb-4">
+            <label class="field-label">Confirm New Password</label>
+            <div class="input-wrap"><i class="bi bi-check-circle input-icon"></i><input type="password" id="adminConfirmPass" class="field-input" placeholder="Repeat new password"></div>
+        </div>
+        <div class="d-flex gap-2">
+            <button class="btn-primary-cta flex-fill" onclick="saveAdminPassword()"><i class="bi bi-save me-1"></i>Update Password</button>
+            <button class="btn-ghost flex-fill" onclick="closeAdminPasswordModal()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- Vote Confirmation Modal -->
+<div id="vote-confirm-modal-overlay" class="modal-overlay d-none" onclick="closeVoteConfirmModal()">
+    <div class="modal-box" onclick="event.stopPropagation()" style="max-width: 500px;">
+        <div class="modal-header-row">
+            <h3 class="modal-title"><i class="bi bi-card-checklist me-2"></i>Confirm Your Vote</h3>
+            <button class="modal-close" onclick="closeVoteConfirmModal()"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <p style="color:var(--text-mid); font-size:0.9rem; margin-bottom:1rem;">Please review your selections below. Once submitted, your vote is final and cannot be changed.</p>
+        
+        <div id="vote-confirm-list" style="background: rgba(0,0,0,0.02); border: 1px solid var(--border-light); border-radius: 12px; padding: 1rem; margin-bottom: 1.5rem; max-height: 400px; overflow-y: auto;">
+            <!-- Filled via JS -->
+        </div>
+        
+        <div class="d-flex gap-2">
+            <button class="btn-primary-cta flex-fill" id="modal-submit-btn" onclick="submitVote()"><i class="bi bi-send-check-fill me-1"></i>Confirm & Submit</button>
+            <button class="btn-ghost flex-fill" id="modal-cancel-btn" onclick="closeVoteConfirmModal()">Go Back</button>
         </div>
     </div>
 </div>
