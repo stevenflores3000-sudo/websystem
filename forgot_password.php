@@ -53,7 +53,12 @@ if ($stmt_update) {
 
 // ── 3. Generate 6-digit OTP ─────────────────────────────────────────
 $otp        = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-$expires_at = date('Y-m-d H:i:s', strtotime('+15 minutes'));
+// Use database time to avoid timezone issues
+$stmt_time = $conn->prepare("SELECT DATE_ADD(NOW(), INTERVAL 15 MINUTE) as expires_at");
+$stmt_time->execute();
+$time_row = $stmt_time->get_result()->fetch_assoc();
+$expires_at = $time_row['expires_at'];
+$stmt_time->close();
 
 // ── 4. Store token in DB ─────────────────────────────────────────────
 $stmt = $conn->prepare(
@@ -85,25 +90,28 @@ if (!$ok) {
  * mail($recovery_email, $subject, $body, $headers);
  */
 
-// ── Option B: PHPMailer via Gmail SMTP (more reliable for Gmail)
-//    Uncomment this block and comment out the mail() call above
-//    after running: composer require phpmailer/phpmailer
-// ─────────────────────────────────────────────────────────────────────
+// ── Option B: PHPMailer via Gmail SMTP
+if (!file_exists('vendor/autoload.php')) {
+    error_log("PHPMailer is not installed. Please run 'composer require phpmailer/phpmailer'");
+    header('Location: index.html?error=phpmailer_missing');
+    exit();
+}
 require 'vendor/autoload.php';
+require 'config.php';
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
 
 $mail = new PHPMailer(true);
 try {
     $mail->isSMTP();
-    $mail->Host       = 'smtp.gmail.com';
+    $mail->Host       = MAIL_HOST;
     $mail->SMTPAuth   = true;
-    $mail->Username   = 'YOUR_SYSTEM_GMAIL@gmail.com';   // ← Replace with your Gmail
-    $mail->Password   = 'YOUR_16_DIGIT_APP_PASSWORD';    // ← Replace with your Gmail App Password
+    $mail->Username   = MAIL_USERNAME;
+    $mail->Password   = MAIL_PASSWORD;
     $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-    $mail->Port       = 587;
+    $mail->Port       = MAIL_PORT;
 
-    $mail->setFrom('YOUR_SYSTEM_GMAIL@gmail.com', 'NU-SmartVote');
+    $mail->setFrom(MAIL_FROM_EMAIL, MAIL_FROM_NAME);
     $mail->addAddress($recovery_email, $user_name);
     $mail->Subject = 'NU-SmartVote — Your Password Reset Code';
     $mail->Body    = "Hello {$user_name},\n\nYour reset code: {$otp}\n\nExpires in 15 minutes.";

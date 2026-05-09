@@ -332,6 +332,7 @@ function handleUrlParams() {
             not_found:      'No account found with those credentials.',
             reset_failed:   'Password reset failed. Please try again.',
             invalid_reset_email: 'Please enter a valid Gmail address.',
+            phpmailer_missing: 'System Error: PHPMailer is not installed. Contact the administrator.',
         };
         showToast(msgs[error] || 'An error occurred.','error');
         cleanUrl();

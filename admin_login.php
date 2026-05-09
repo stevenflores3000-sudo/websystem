@@ -38,6 +38,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     }
 
     // 3. Verify Admin Credentials
+    // Verify Admin Credentials against the database
     $stmt = $conn->prepare("SELECT * FROM admin WHERE admin_id = ?");
     $stmt->bind_param('s', $admin_id);
     $stmt->execute();
