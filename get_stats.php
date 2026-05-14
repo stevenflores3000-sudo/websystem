@@ -185,18 +185,20 @@ if ($section === 'all' || $section === 'tally') {
         // Candidates + vote counts grouped by position
         $stmt3 = $conn->prepare(
             "SELECT c.id AS candidate_id,
-                    u.name AS candidate_name,
+                    COALESCE(NULLIF(c.name, ''), u.name) AS candidate_name,
                     c.position_title,
                     p.id AS party_id,
                     COALESCE(p.name, 'Independent') AS party_name,
-                    COUNT(v.id) AS vote_count
+                    COUNT(v.id) AS vote_count,
+                    ep.id AS pos_order
              FROM candidate c
-             JOIN user u ON u.id = c.user_id
+             LEFT JOIN user u ON u.id = c.user_id
              LEFT JOIN partylist p ON p.id = c.party_id
              LEFT JOIN vote v ON v.candidate_id = c.id AND v.election_id = ?
+             LEFT JOIN election_position ep ON ep.election_id = c.election_id AND ep.title = c.position_title
              WHERE c.election_id = ?
-             GROUP BY c.id, u.name, c.position_title, p.id, p.name
-             ORDER BY c.position_title, vote_count DESC"
+             GROUP BY c.id, c.name, u.name, c.position_title, p.id, p.name, ep.id
+             ORDER BY CASE WHEN c.position_title = 'President' THEN 0 ELSE 1 END, ep.id ASC, c.position_title ASC, vote_count DESC"
         );
         $stmt3->bind_param('ss', $eid, $eid);
         $stmt3->execute();
@@ -207,7 +209,7 @@ if ($section === 'all' || $section === 'tally') {
         $positions = [];
         
         // Pre-fill empty positions directly from the dedicated database table
-        $stmtP = $conn->prepare("SELECT title FROM election_position WHERE election_id = ?");
+        $stmtP = $conn->prepare("SELECT title FROM election_position WHERE election_id = ? ORDER BY CASE WHEN title = 'President' THEN 0 ELSE 1 END, id ASC");
         $stmtP->bind_param('s', $eid);
         $stmtP->execute();
         $resP = $stmtP->get_result();
@@ -257,13 +259,14 @@ if ($section === 'receipt') {
     } else {
         $user_id = $_SESSION['user_id'];
         $stmt = $conn->prepare(
-            "SELECT c.position_title, u.name AS candidate_name, COALESCE(p.name, 'Independent') AS party_name
+            "SELECT c.position_title, COALESCE(NULLIF(c.name, ''), u.name) AS candidate_name, COALESCE(p.name, 'Independent') AS party_name
              FROM vote v
              JOIN candidate c ON v.candidate_id = c.id
-             JOIN user u ON c.user_id = u.id
+             LEFT JOIN user u ON c.user_id = u.id
              LEFT JOIN partylist p ON c.party_id = p.id
+             LEFT JOIN election_position ep ON ep.election_id = c.election_id AND ep.title = c.position_title
              WHERE v.election_id = ? AND v.user_id = ?
-             ORDER BY c.position_title"
+             ORDER BY CASE WHEN c.position_title = 'President' THEN 0 ELSE 1 END, ep.id ASC, c.position_title ASC"
         );
         $stmt->bind_param('ss', $election_id, $user_id);
         $stmt->execute();

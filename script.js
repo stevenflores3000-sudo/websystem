@@ -80,6 +80,13 @@ function showVoterDashboard() {
 }
 
 function showBallot() {
+    const elec = getElection(currentElectionId);
+    if (elec && elec.voted) {
+        showToast('You have already cast your vote in this election.', 'info');
+        showVoterDashboard();
+        return;
+    }
+
     ['voter-dashboard','ballot-section','success-section','receipt-section'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.classList.add('d-none');
@@ -87,6 +94,14 @@ function showBallot() {
     const ballot = document.getElementById('ballot-section');
     if (ballot) ballot.classList.remove('d-none');
     buildBallot();
+}
+
+function showSuccess() {
+    ['voter-dashboard','ballot-section','success-section','receipt-section'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('d-none');
+    });
+    document.getElementById('success-section').classList.remove('d-none');
 }
 
 async function showReceipt(elecId) {
@@ -677,11 +692,13 @@ async function submitVote() {
 
             closeVoteConfirmModal();
 
-            ['voter-dashboard','ballot-section','success-section','receipt-section'].forEach(id => {
-                const el = document.getElementById(id);
-                if (el) el.classList.add('d-none');
-            });
-            document.getElementById('success-section').classList.remove('d-none');
+            showSuccess();
+            
+            // Overwrite the "#ballot" history state with "#success" to prevent the back button from returning to the ballot
+            if (typeof history.replaceState === 'function') {
+                history.replaceState({ page: 'success' }, '', '#success');
+            }
+            
             showToast('Vote submitted successfully!','success');
         } else {
             showToast(result.error || 'An error occurred.','error');
@@ -1133,12 +1150,15 @@ function renderCandidatesTab() {
             <div class="admin-party-header">
                 <div class="admin-party-header-left">
                     <div class="admin-party-icon"><i class="bi bi-people-fill"></i></div>
-                    <div>
+                    <div id="party-name-display-${party.id}">
                         <div class="admin-party-name">${escapeHtml(party.name)}</div>
                         <div class="admin-party-count">${party.candidates.length} candidate${party.candidates.length!==1?'s':''}</div>
                     </div>
                 </div>
-                <button class="btn-icon-danger" onclick="deleteParty('${elecId}','${party.id}')" title="Delete Party"><i class="bi bi-trash-fill"></i></button>
+                <div>
+                    <button class="btn-icon-info" onclick="startEditParty('${elecId}','${party.id}')" title="Edit Party Name"><i class="bi bi-pencil-fill"></i></button>
+                    <button class="btn-icon-danger" onclick="deleteParty('${elecId}','${party.id}')" title="Delete Party"><i class="bi bi-trash-fill"></i></button>
+                </div>
             </div>
             <div class="admin-cand-list">
                 ${party.candidates.length === 0
@@ -1171,9 +1191,7 @@ function renderPositionManager(elec) {
         <div class="position-tag-item">
             <i class="bi bi-briefcase-fill" style="font-size:.75rem;"></i>
             ${escapeHtml(pos)}
-            ${elec.customPositions.length > 1
-                ? `<button onclick="deletePosition('${elec.id}',${idx})" title="Remove"><i class="bi bi-x"></i></button>`
-                : ''}
+            <button onclick="deletePosition('${elec.id}',${idx})" title="Remove"><i class="bi bi-x"></i></button>
         </div>`).join('');
 }
 
@@ -1226,9 +1244,6 @@ async function deletePosition(elecId, idx) {
     const elec = getElection(elecId);
     if (!elec) return;
     const pos = elec.customPositions[idx];
-    if (elec.partyLists.some(p => p.candidates.some(c => c.position === pos))) {
-        showToast(`Cannot remove "${pos}" — candidates are assigned to it.`,'error'); return;
-    }
     if (!confirm(`Remove position "${pos}"?`)) return;
     
     try {
@@ -1349,6 +1364,32 @@ function populatePartyDropdown(elec) {
         + (elec ? elec.partyLists.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('') : '');
 }
 
+// ── Edit Party Name ──────────────────────
+function startEditParty(elecId, partyId) {
+    const elec  = getElection(elecId);
+    const party = elec?.partyLists.find(p => p.id === partyId);
+    if (!party) return;
+    const displayEl = document.getElementById(`party-name-display-${partyId}`);
+    displayEl.innerHTML = `
+        <div style="display:flex; gap:8px; align-items:center;">
+            <input type="text" id="edit-party-name-${partyId}" class="field-input" value="${escapeHtml(party.name)}" style="height:32px;font-size:.9rem;padding:0 10px; width:200px;">
+            <button class="btn-success-sm" onclick="saveEditParty('${elecId}','${partyId}')" style="padding:0 8px; height:32px;" title="Save"><i class="bi bi-check-lg"></i></button>
+            <button class="btn-ghost-sm" onclick="renderCandidatesTab()" style="padding:0 8px; height:32px;" title="Cancel"><i class="bi bi-x-lg"></i></button>
+        </div>`;
+}
+async function saveEditParty(elecId, partyId) {
+    const newName = document.getElementById(`edit-party-name-${partyId}`)?.value.trim();
+    if (!newName) { showToast('Party name cannot be empty.','error'); return; }
+    try {
+        const res = await fetch('admin_api.php', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'edit_party', party_id: partyId, name: newName }) });
+        const data = await res.json();
+        if (data.success) { await loadElectionsFromDB(); renderCandidatesTab(); showToast('Party updated successfully!', 'success'); }
+        else { showToast('Error: ' + data.error, 'error'); }
+    } catch (err) {
+        showToast('Network error.', 'error');
+    }
+}
+
 // ── Candidate Management ─────────────────
 function toggleCandidateForm() {
     const form = document.getElementById('candidate-form');
@@ -1442,54 +1483,50 @@ async function deleteCandidate(elecId, partyId, candId) {
     }
 }
 
-// ── Edit candidate name ──────────────────
+// ── Edit candidate name & position ───────
 function startEditCandidate(elecId, partyId, candId) {
     const elec  = getElection(elecId);
     const party = elec?.partyLists.find(p => p.id === partyId);
     const cand  = party?.candidates.find(c => c.id === candId);
     if (!cand) return;
 
-    const nameEl    = document.getElementById(`cand-name-display-${candId}`);
-    const itemEl    = document.getElementById(`cand-item-${candId}`);
-    const actionsEl = itemEl.querySelector('.admin-cand-item-actions');
+    const itemEl = document.getElementById(`cand-item-${candId}`);
+    const posOptions = elec.customPositions.map(p => 
+        `<option value="${escapeHtml(p)}" ${p === cand.position ? 'selected' : ''}>${escapeHtml(p)}</option>`
+    ).join('');
 
-    nameEl.innerHTML = `
-        <div class="cand-edit-wrap">
-            <input type="text" id="edit-input-${candId}" class="cand-edit-input field-input" value="${escapeHtml(cand.name)}" style="height:32px;font-size:.83rem;padding:0 10px;">
-            <div class="cand-edit-btns">
-                <button class="admin-btn-save-edit" onclick="saveEditCandidate('${elecId}','${partyId}','${candId}')" title="Save"><i class="bi bi-check-lg"></i></button>
-                <button class="admin-btn-cancel-edit" onclick="renderCandidatesTab()" title="Cancel"><i class="bi bi-x-lg"></i></button>
+    itemEl.innerHTML = `
+        <div class="admin-cand-item-left" style="width: 100%; align-items:center;">
+            <div class="admin-cand-avatar"><i class="bi bi-pencil"></i></div>
+            <div style="display:flex; gap:10px; width:100%; align-items:center;">
+                <input type="text" id="edit-name-${candId}" class="field-input" value="${escapeHtml(cand.name)}" style="height:32px;font-size:.85rem;padding:0 10px; flex:1;" placeholder="Candidate Name">
+                <select id="edit-pos-${candId}" class="field-input field-select" style="height:32px;font-size:.85rem;padding:0 10px; width:150px;">
+                    ${posOptions}
+                </select>
+                <div style="display:flex; gap:5px;">
+                    <button class="btn-success-sm" onclick="saveEditCandidate('${elecId}','${partyId}','${candId}')" style="padding:0 8px; height:32px;" title="Save"><i class="bi bi-check-lg"></i></button>
+                    <button class="btn-ghost-sm" onclick="renderCandidatesTab()" style="padding:0 8px; height:32px;" title="Cancel"><i class="bi bi-x-lg"></i></button>
+                </div>
             </div>
         </div>`;
-    actionsEl.style.display = 'none';
-
-    const inp = document.getElementById(`edit-input-${candId}`);
-    inp?.focus(); inp?.select();
-    inp?.addEventListener('keydown', e => {
-        if (e.key === 'Enter')  saveEditCandidate(elecId, partyId, candId);
-        if (e.key === 'Escape') renderCandidatesTab();
-    });
 }
 
 async function saveEditCandidate(elecId, partyId, candId) {
-    const elec  = getElection(elecId);
-    const party = elec?.partyLists.find(p => p.id === partyId);
-    const cand  = party?.candidates.find(c => c.id === candId);
-    if (!cand) return;
-    const newName = document.getElementById(`edit-input-${candId}`)?.value.trim();
+    const newName = document.getElementById(`edit-name-${candId}`)?.value.trim();
+    const newPos  = document.getElementById(`edit-pos-${candId}`)?.value;
     if (!newName) { showToast('Name cannot be empty.','error'); return; }
-
+    if (!newPos)  { showToast('Position cannot be empty.','error'); return; }
     try {
         const res = await fetch('admin_api.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'edit_candidate', candidate_id: candId, name: newName })
+            body: JSON.stringify({ action: 'edit_candidate', candidate_id: candId, name: newName, position: newPos })
         });
         const data = await res.json();
         if (data.success) {
             await loadElectionsFromDB();
             renderCandidatesTab();
-            showToast(`Name updated to "${newName}"!`, 'success');
+            showToast('Candidate updated successfully!', 'success');
         } else {
             showToast('Error: ' + data.error, 'error');
         }
@@ -1516,7 +1553,6 @@ async function renderResults() {
     const elecId       = document.getElementById('results-election-filter').value;
     const statsGrid    = document.getElementById('results-stats-grid');
     const chartsContainer = document.getElementById('results-charts-container');
-
     if (!elecId) {
         statsGrid.innerHTML = '';
         chartsContainer.innerHTML = `<div class="admin-empty-state"><i class="bi bi-arrow-up-circle"></i>Select an election above to view results.</div>`;

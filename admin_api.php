@@ -88,17 +88,17 @@ try {
         }
         $checkStmt->close();
 
-        // Because the candidate table links to the user table, we create a dummy user profile for the candidate
-        $u_id = 'CAND-' . mt_rand(100000, 999999);
-        $dummy_pass = password_hash('candidate', PASSWORD_DEFAULT);
-        $stmtU = $conn->prepare("INSERT INTO user (id, student_id, name, password) VALUES (?, ?, ?, ?)");
-        $stmtU->bind_param('ssss', $u_id, $u_id, $name, $dummy_pass);
-        $stmtU->execute();
-        
-        // Insert the candidate linked to the dummy user
+        // Add 'name' column to candidate table if it doesn't exist
+        $checkCol = $conn->query("SHOW COLUMNS FROM candidate LIKE 'name'");
+        if ($checkCol && $checkCol->num_rows == 0) {
+            $conn->query("ALTER TABLE candidate ADD COLUMN name VARCHAR(100) DEFAULT ''");
+            $conn->query("ALTER TABLE candidate MODIFY user_id VARCHAR(50) NULL");
+        }
+
+        // Insert the candidate directly into the candidate table
         $c_id = 'C-' . mt_rand(10000, 99999);
-        $stmtC = $conn->prepare("INSERT INTO candidate (id, user_id, position_title, party_id, election_id) VALUES (?, ?, ?, ?, ?)");
-        $stmtC->bind_param('sssss', $c_id, $u_id, $pos, $party_id, $elec_id);
+        $stmtC = $conn->prepare("INSERT INTO candidate (id, user_id, name, position_title, party_id, election_id) VALUES (?, NULL, ?, ?, ?, ?)");
+        $stmtC->bind_param('sssss', $c_id, $name, $pos, $party_id, $elec_id);
         $stmtC->execute();
         
         echo json_encode(['success' => true]);
@@ -107,43 +107,29 @@ try {
     elseif ($action === 'delete_candidate') {
         $cand_id = $data['candidate_id'];
         
-        // Get user_id to delete the dummy user as well
-        $stmt = $conn->prepare("SELECT user_id FROM candidate WHERE id = ?");
-        $stmt->bind_param('s', $cand_id);
-        $stmt->execute();
-        $res = $stmt->get_result();
-        if ($row = $res->fetch_assoc()) {
-            $u_id = $row['user_id'];
-            
-            // Delete votes (handle both table names gracefully to prevent FK errors)
-            $conn->query("DELETE FROM vote WHERE candidate_id = '" . $conn->real_escape_string($cand_id) . "'");
-            $conn->query("DELETE FROM votes WHERE candidate_id = '" . $conn->real_escape_string($cand_id) . "'");
-            
-            // Delete candidate
-            $stmtC = $conn->prepare("DELETE FROM candidate WHERE id = ?");
-            $stmtC->bind_param('s', $cand_id);
-            $stmtC->execute();
-            
-            // Delete dummy user
-            $stmtU = $conn->prepare("DELETE FROM user WHERE id = ?");
-            $stmtU->bind_param('s', $u_id);
-            $stmtU->execute();
-        }
+        // Delete votes (handle both table names gracefully to prevent FK errors)
+        $conn->query("DELETE FROM vote WHERE candidate_id = '" . $conn->real_escape_string($cand_id) . "'");
+        $conn->query("DELETE FROM votes WHERE candidate_id = '" . $conn->real_escape_string($cand_id) . "'");
+        
+        // Delete candidate
+        $stmtC = $conn->prepare("DELETE FROM candidate WHERE id = ?");
+        $stmtC->bind_param('s', $cand_id);
+        $stmtC->execute();
+        
         echo json_encode(['success' => true]);
     }
     // ── 6. Delete a Party ─────────────────────────────────────
     elseif ($action === 'delete_party') {
         $party_id = $data['party_id'];
         
-        // Get all candidates for this party to delete their dummy users and votes
-        $stmt = $conn->prepare("SELECT id, user_id FROM candidate WHERE party_id = ?");
+        // Get all candidates for this party to delete their votes
+        $stmt = $conn->prepare("SELECT id FROM candidate WHERE party_id = ?");
         $stmt->bind_param('s', $party_id);
         $stmt->execute();
         $res = $stmt->get_result();
         
         while ($row = $res->fetch_assoc()) {
             $cand_id = $row['id'];
-            $u_id = $row['user_id'];
             
             $conn->query("DELETE FROM vote WHERE candidate_id = '" . $conn->real_escape_string($cand_id) . "'");
             $conn->query("DELETE FROM votes WHERE candidate_id = '" . $conn->real_escape_string($cand_id) . "'");
@@ -151,15 +137,22 @@ try {
             $stmtC = $conn->prepare("DELETE FROM candidate WHERE id = ?");
             $stmtC->bind_param('s', $cand_id);
             $stmtC->execute();
-            
-            $stmtU = $conn->prepare("DELETE FROM user WHERE id = ?");
-            $stmtU->bind_param('s', $u_id);
-            $stmtU->execute();
         }
         
         // Delete party
         $stmtP = $conn->prepare("DELETE FROM partylist WHERE id = ?");
         $stmtP->bind_param('s', $party_id);
+        $stmtP->execute();
+        
+        echo json_encode(['success' => true]);
+    }
+    // ── 6.5. Edit a Party ─────────────────────────────────────
+    elseif ($action === 'edit_party') {
+        $party_id = $data['party_id'];
+        $new_name = $data['name'];
+        
+        $stmtP = $conn->prepare("UPDATE partylist SET name = ? WHERE id = ?");
+        $stmtP->bind_param('ss', $new_name, $party_id);
         $stmtP->execute();
         
         echo json_encode(['success' => true]);
@@ -170,18 +163,9 @@ try {
         $new_name = $data['name'] ?? null;
         
         if ($new_name) {
-            // Retrieve the dummy user_id to update the name
-            $stmt = $conn->prepare("SELECT user_id FROM candidate WHERE id = ?");
-            $stmt->bind_param('s', $cand_id);
-            $stmt->execute();
-            $res = $stmt->get_result();
-            
-            if ($row = $res->fetch_assoc()) {
-                $u_id = $row['user_id'];
-                $stmtU = $conn->prepare("UPDATE user SET name = ? WHERE id = ?");
-                $stmtU->bind_param('ss', $new_name, $u_id);
-                $stmtU->execute();
-            }
+            $stmtC = $conn->prepare("UPDATE candidate SET name = ? WHERE id = ?");
+            $stmtC->bind_param('ss', $new_name, $cand_id);
+            $stmtC->execute();
         }
         
         if (!empty($data['position'])) {
@@ -200,25 +184,12 @@ try {
         $conn->query("DELETE FROM vote WHERE election_id = '" . $conn->real_escape_string($elec_id) . "'");
         $conn->query("DELETE FROM votes WHERE election_id = '" . $conn->real_escape_string($elec_id) . "'");
         
-        // 2. Fetch candidates to remove their dummy user profiles
-        $stmtC = $conn->prepare("SELECT user_id FROM candidate WHERE election_id = ?");
-        $stmtC->bind_param('s', $elec_id);
-        $stmtC->execute();
-        $resC = $stmtC->get_result();
-        
-        $stmtDelU = $conn->prepare("DELETE FROM user WHERE id = ?");
-        while ($row = $resC->fetch_assoc()) {
-            $stmtDelU->bind_param('s', $row['user_id']);
-            $stmtDelU->execute();
-        }
-        $stmtDelU->close();
-        
-        // 3. Delete candidates linked to this election
+        // 2. Delete candidates linked to this election
         $stmtDelC = $conn->prepare("DELETE FROM candidate WHERE election_id = ?");
         $stmtDelC->bind_param('s', $elec_id);
         $stmtDelC->execute();
         
-        // 4. Finally, delete the election itself
+        // 3. Finally, delete the election itself
         $stmtDelE = $conn->prepare("DELETE FROM election WHERE id = ?");
         $stmtDelE->bind_param('s', $elec_id);
         $stmtDelE->execute();
@@ -291,6 +262,23 @@ try {
         $elec_id = $data['election_id'];
         $title = $data['title'];
         
+        // 1. Find all candidates under this position to delete their votes
+        $stmtC = $conn->prepare("SELECT id FROM candidate WHERE election_id = ? AND position_title = ?");
+        $stmtC->bind_param('ss', $elec_id, $title);
+        $stmtC->execute();
+        $resC = $stmtC->get_result();
+        while ($row = $resC->fetch_assoc()) {
+            $cand_id = $row['id'];
+            $conn->query("DELETE FROM vote WHERE candidate_id = '" . $conn->real_escape_string($cand_id) . "'");
+        }
+        $stmtC->close();
+
+        // 2. Delete candidates under this position
+        $stmtDelC = $conn->prepare("DELETE FROM candidate WHERE election_id = ? AND position_title = ?");
+        $stmtDelC->bind_param('ss', $elec_id, $title);
+        $stmtDelC->execute();
+
+        // 3. Delete the position itself
         $stmt = $conn->prepare("DELETE FROM election_position WHERE election_id = ? AND title = ?");
         $stmt->bind_param('ss', $elec_id, $title);
         $stmt->execute();

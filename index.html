@@ -792,5 +792,64 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="script.js?v=2.1"></script>
+
+<!-- Browser History (Back/Forward) Support -->
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    // 1. Wrap existing navigation functions to push state to the browser history
+    function wrapFunction(funcName, stateObj, hash) {
+        if (typeof window[funcName] === 'function') {
+            const originalFunc = window[funcName];
+            window[funcName] = function(...args) {
+                // Check if this function is being called by the back button
+                const isPopState = args.length > 0 && args[args.length - 1] === 'FROM_POPSTATE';
+                
+                if (!isPopState) {
+                    const finalState = typeof stateObj === 'function' ? stateObj(...args) : stateObj;
+                    const finalHash = typeof hash === 'function' ? hash(...args) : hash;
+                    
+                    // Only push a new state if the hash is actually changing
+                    if (window.location.hash !== finalHash) {
+                        history.pushState(finalState, '', finalHash);
+                    }
+                }
+                
+                // Strip our popstate flag and run the actual function from script.js
+                const cleanArgs = isPopState ? args.slice(0, -1) : args;
+                return originalFunc.apply(this, cleanArgs);
+            };
+        }
+    }
+
+    // Intercept Auth, Voter, and Admin page functions automatically
+    wrapFunction('showLogin', { page: 'login' }, '#login');
+    wrapFunction('showRegister', { page: 'register' }, '#register');
+    wrapFunction('showForgot', { page: 'forgot' }, '#forgot');
+    wrapFunction('showAuthPage', { page: 'login' }, '#login');
+    wrapFunction('showVoterDashboard', { page: 'voter-dashboard' }, '#dashboard');
+    wrapFunction('showBallot', { page: 'ballot' }, '#ballot');
+    wrapFunction('showReceipt', { page: 'receipt' }, '#receipt');
+    wrapFunction('switchAdminTab', (tabName) => ({ page: 'admin-tab', tab: tabName }), (tabName) => '#admin-' + tabName);
+
+    // 2. Listen to the Browser's Back/Forward buttons and restore the correct view
+    window.addEventListener('popstate', function(event) {
+        const state = event.state || { page: 'login' };
+        
+        switch(state.page) {
+            case 'login':           if (typeof window.showLogin === 'function') window.showLogin('FROM_POPSTATE'); break;
+            case 'register':        if (typeof window.showRegister === 'function') window.showRegister('FROM_POPSTATE'); break;
+            case 'forgot':          if (typeof window.showForgot === 'function') window.showForgot('FROM_POPSTATE'); break;
+            case 'voter-dashboard': if (typeof window.showVoterDashboard === 'function') window.showVoterDashboard('FROM_POPSTATE'); break;
+            case 'ballot':          if (typeof window.showBallot === 'function') window.showBallot('FROM_POPSTATE'); break;
+            case 'receipt':         if (typeof window.showReceipt === 'function') window.showReceipt(typeof currentElectionId !== 'undefined' ? currentElectionId : null, 'FROM_POPSTATE'); break;
+            case 'admin-tab':       if (typeof window.switchAdminTab === 'function') window.switchAdminTab(state.tab, 'FROM_POPSTATE'); break;
+            case 'success':         if (typeof window.showSuccess === 'function') window.showSuccess('FROM_POPSTATE'); break;
+        }
+    });
+
+    // 3. Set initial base state so the first back-button press works smoothly
+    history.replaceState({ page: 'login' }, '', window.location.pathname + window.location.search);
+});
+</script>
 </body>
 </html>
