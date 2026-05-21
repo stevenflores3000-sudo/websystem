@@ -78,15 +78,8 @@ try {
         $pos = $data['position'];
         $name = $data['name'];
 
-        // Prevent duplicate candidate for the same position and party in the same election
-        $checkStmt = $conn->prepare("SELECT id FROM candidate WHERE election_id = ? AND party_id = ? AND position_title = ?");
-        $checkStmt->bind_param('sss', $elec_id, $party_id, $pos);
-        $checkStmt->execute();
-        if ($checkStmt->get_result()->num_rows > 0) {
-            echo json_encode(['success' => false, 'error' => 'A candidate for this position already exists in this party.']);
-            exit;
-        }
-        $checkStmt->close();
+        // The system previously prevented adding multiple candidates to the same position within the same party.
+        // This check has been removed to allow multiple candidates per position (e.g., multiple Senators in one partylist).
 
         // Add 'name' column to candidate table if it doesn't exist
         $checkCol = $conn->query("SHOW COLUMNS FROM candidate LIKE 'name'");
@@ -109,7 +102,6 @@ try {
         
         // Delete votes (handle both table names gracefully to prevent FK errors)
         $conn->query("DELETE FROM vote WHERE candidate_id = '" . $conn->real_escape_string($cand_id) . "'");
-        $conn->query("DELETE FROM votes WHERE candidate_id = '" . $conn->real_escape_string($cand_id) . "'");
         
         // Delete candidate
         $stmtC = $conn->prepare("DELETE FROM candidate WHERE id = ?");
@@ -132,7 +124,6 @@ try {
             $cand_id = $row['id'];
             
             $conn->query("DELETE FROM vote WHERE candidate_id = '" . $conn->real_escape_string($cand_id) . "'");
-            $conn->query("DELETE FROM votes WHERE candidate_id = '" . $conn->real_escape_string($cand_id) . "'");
             
             $stmtC = $conn->prepare("DELETE FROM candidate WHERE id = ?");
             $stmtC->bind_param('s', $cand_id);
@@ -182,7 +173,6 @@ try {
         
         // 1. Delete all votes cast in this election (handles both table naming conventions)
         $conn->query("DELETE FROM vote WHERE election_id = '" . $conn->real_escape_string($elec_id) . "'");
-        $conn->query("DELETE FROM votes WHERE election_id = '" . $conn->real_escape_string($elec_id) . "'");
         
         // 2. Delete candidates linked to this election
         $stmtDelC = $conn->prepare("DELETE FROM candidate WHERE election_id = ?");
@@ -238,8 +228,13 @@ try {
     elseif ($action === 'add_position') {
         $elec_id = $data['election_id'];
         $title = $data['title'];
+        $max_votes = isset($data['max_votes']) ? (int)$data['max_votes'] : 1;
         
-        $conn->query("CREATE TABLE IF NOT EXISTS election_position (id INT AUTO_INCREMENT PRIMARY KEY, election_id VARCHAR(50), title VARCHAR(100))");
+        $conn->query("CREATE TABLE IF NOT EXISTS election_position (id INT AUTO_INCREMENT PRIMARY KEY, election_id VARCHAR(50), title VARCHAR(100), max_votes INT DEFAULT 1)");
+        $checkMax = $conn->query("SHOW COLUMNS FROM election_position LIKE 'max_votes'");
+        if ($checkMax && $checkMax->num_rows == 0) {
+            $conn->query("ALTER TABLE election_position ADD COLUMN max_votes INT DEFAULT 1");
+        }
         
         // Prevent duplicate positions in the same election
         $check = $conn->prepare("SELECT id FROM election_position WHERE election_id = ? AND LOWER(title) = LOWER(?)");
@@ -251,8 +246,8 @@ try {
         }
         $check->close();
         
-        $stmt = $conn->prepare("INSERT INTO election_position (election_id, title) VALUES (?, ?)");
-        $stmt->bind_param('ss', $elec_id, $title);
+        $stmt = $conn->prepare("INSERT INTO election_position (election_id, title, max_votes) VALUES (?, ?, ?)");
+        $stmt->bind_param('ssi', $elec_id, $title, $max_votes);
         $stmt->execute();
         
         echo json_encode(['success' => true]);
@@ -272,6 +267,10 @@ try {
             $conn->query("DELETE FROM vote WHERE candidate_id = '" . $conn->real_escape_string($cand_id) . "'");
         }
         $stmtC->close();
+
+        // Delete abstain votes for this position
+        $abstain_id = 'ABSTAIN__' . $title;
+        $conn->query("DELETE FROM vote WHERE candidate_id = '" . $conn->real_escape_string($abstain_id) . "'");
 
         // 2. Delete candidates under this position
         $stmtDelC = $conn->prepare("DELETE FROM candidate WHERE election_id = ? AND position_title = ?");

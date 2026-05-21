@@ -424,7 +424,7 @@
             <p class="success-note">Thank you for participating. Your vote is confidential and securely stored.</p>
             <button class="btn-ghost" style="width:220px; margin-bottom:10px;" onclick="showVoterDashboard()"><i class="bi bi-house-fill me-2"></i>Return to Dashboard</button>
             <br>
-            <button class="btn-outline-sm" onclick="showReceipt(currentElectionId)"><i class="bi bi-receipt me-2"></i>View Ballot Receipt</button>
+            <button class="btn-outline-sm" style="color: white; border-color: rgba(255,255,255,0.5);" onclick="showReceipt(currentElectionId)"><i class="bi bi-receipt me-2"></i>View Ballot Receipt</button>
         </div>
     </div>
 
@@ -526,7 +526,7 @@
                         <button class="btn-outline-sm" onclick="showAddPositionForm()"><i class="bi bi-plus-lg me-1"></i>Add Position</button>
                     </div>
                     <div id="add-position-form" class="inline-form d-none">
-                        <div class="input-wrap" style="max-width:300px;">
+                        <div class="input-wrap" style="flex-grow: 1;">
                             <i class="bi bi-briefcase input-icon"></i>
                             <input type="text" id="newPositionName" class="field-input" placeholder="e.g. Treasurer, Auditor, PRO">
                         </div>

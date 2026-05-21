@@ -474,6 +474,8 @@ function updateVoteButtonState(elec) {
         voteBtn.style.cursor = 'pointer';
         voteBtn.style.width = 'fit-content';
         voteBtn.style.padding = '0.75rem 1.5rem';
+        voteBtn.style.color = 'white';
+        voteBtn.style.borderColor = 'rgba(255,255,255,0.5)';
         voteBtn.onclick = () => showReceipt(elec.id);
     } else {
         voteBtn.disabled = false;
@@ -482,6 +484,8 @@ function updateVoteButtonState(elec) {
         voteBtn.style.cursor = 'pointer';
         voteBtn.style.width = '';
         voteBtn.style.padding = '';
+        voteBtn.style.color = '';
+        voteBtn.style.borderColor = '';
         voteBtn.onclick = showBallot;
     }
 }
@@ -523,12 +527,20 @@ function buildBallot() {
     votes = {};
 
     const positions = getAllPositions(elec);
-    positions.forEach(p => { votes[getPositionKey(p)] = null; });
+    positions.forEach(p => { votes[getPositionKey(p)] = []; });
 
     positions.forEach((pos, idx) => {
         const key        = getPositionKey(pos);
         const candidates = getCandidatesByPosition(elec, pos);
         if (candidates.length === 0) return;
+        const abstainId  = 'ABSTAIN__' + pos;
+        
+        // Automatically determine max votes by finding the party with the most candidates for this position
+        let maxVotes = 1;
+        elec.partyLists.forEach(p => {
+            const count = p.candidates.filter(c => c.position === pos).length;
+            if (count > maxVotes) maxVotes = count;
+        });
 
         const block = document.createElement('div');
         block.className = 'position-block';
@@ -537,7 +549,7 @@ function buildBallot() {
                 <span class="pos-num">${String(idx+1).padStart(2,'0')}</span>
                 <div>
                     <div class="pos-title">${escapeHtml(pos)}</div>
-                    <div class="pos-sub">Select one candidate</div>
+                    <div class="pos-sub">Select ${maxVotes > 1 ? 'up to ' + maxVotes + ' candidates' : 'one candidate'}</div>
                 </div>
                 <i class="bi bi-circle pos-check" id="chk-${key}"></i>
             </div>
@@ -546,7 +558,7 @@ function buildBallot() {
                     const [bg, bg2] = AVATAR_COLORS[ci % AVATAR_COLORS.length];
                     const initials  = c.name.split(' ').map(n => n[0]).join('').slice(0,2);
                     return `
-                    <div class="candidate-card" data-candidate-id="${c.id}" onclick="selectCandidate(this,'${key}')">
+                    <div class="candidate-card" data-candidate-id="${c.id}" onclick="selectCandidate(this,'${key}', ${maxVotes})">
                         <div class="cand-avatar" style="background:${bg2};color:${bg};">${initials}</div>
                         <div>
                             <div class="cand-name">${escapeHtml(c.name)}</div>
@@ -555,6 +567,14 @@ function buildBallot() {
                         <div class="cand-radio"><i class="bi bi-circle"></i></div>
                     </div>`;
                 }).join('')}
+                <div class="candidate-card" data-candidate-id="${abstainId}" onclick="selectCandidate(this,'${key}', ${maxVotes})">
+                    <div class="cand-avatar" style="background:#f1f5f9;color:#64748b;">AB</div>
+                    <div>
+                        <div class="cand-name" style="color:var(--text-mid); font-style:italic;">Abstain</div>
+                        <div class="cand-party">—</div>
+                    </div>
+                    <div class="cand-radio"><i class="bi bi-circle"></i></div>
+                </div>
             </div>`;
         container.appendChild(block);
     });
@@ -562,18 +582,51 @@ function buildBallot() {
     updateBallotProgress(elec);
 }
 
-function selectCandidate(cardEl, position) {
+function selectCandidate(cardEl, position, maxVotes) {
+    const candId = cardEl.dataset.candidateId;
+    if (!votes[position]) votes[position] = [];
+
+    if (candId.startsWith('ABSTAIN__')) {
+        votes[position] = [candId];
+    } else {
+        votes[position] = votes[position].filter(id => !id.startsWith('ABSTAIN__'));
+        
+        const idx = votes[position].indexOf(candId);
+        if (idx > -1) {
+            votes[position].splice(idx, 1);
+        } else {
+            if (votes[position].length < maxVotes) {
+                votes[position].push(candId);
+            } else if (maxVotes === 1) {
+                votes[position] = [candId];
+            } else {
+                showToast(`You can only select up to ${maxVotes} candidates for this position.`, 'error');
+                return;
+            }
+        }
+    }
+
     const grid = cardEl.closest('.candidates-grid');
     grid.querySelectorAll('.candidate-card').forEach(c => {
-        c.classList.remove('selected');
-        c.querySelector('.cand-radio i').className = 'bi bi-circle';
+        if (votes[position].includes(c.dataset.candidateId)) {
+            c.classList.add('selected');
+            c.querySelector('.cand-radio i').className = 'bi bi-check-circle-fill';
+        } else {
+            c.classList.remove('selected');
+            c.querySelector('.cand-radio i').className = 'bi bi-circle';
+        }
     });
-    cardEl.classList.add('selected');
-    cardEl.querySelector('.cand-radio i').className = 'bi bi-check-circle-fill';
-    votes[position] = cardEl.dataset.candidateId;
 
     const chk = document.getElementById('chk-' + position);
-    if (chk) { chk.classList.add('done'); chk.className = 'bi bi-check-circle-fill pos-check done'; }
+    if (chk) {
+        if (votes[position].length > 0) {
+            chk.classList.add('done');
+            chk.className = 'bi bi-check-circle-fill pos-check done';
+        } else {
+            chk.classList.remove('done');
+            chk.className = 'bi bi-circle pos-check';
+        }
+    }
     const elec = getElection(currentElectionId);
     updateBallotProgress(elec);
 }
@@ -581,7 +634,7 @@ function selectCandidate(cardEl, position) {
 function updateBallotProgress(elec) {
     if (!elec) return;
     const allKeys = Object.keys(votes);
-    const filled  = allKeys.filter(k => votes[k] !== null).length;
+    const filled  = allKeys.filter(k => Array.isArray(votes[k]) && votes[k].length > 0).length;
     const total   = allKeys.length;
     if (total === 0) return;
 
@@ -607,7 +660,7 @@ function showVoteConfirmModal() {
     if (!elec) return;
 
     const allKeys = Object.keys(votes);
-    if (allKeys.some(k => votes[k] === null)) {
+    if (allKeys.some(k => !Array.isArray(votes[k]) || votes[k].length === 0)) {
         showToast('Please vote in all positions first.','error');
         return;
     }
@@ -618,29 +671,37 @@ function showVoteConfirmModal() {
     const positions = getAllPositions(elec);
     positions.forEach(pos => {
         const key = getPositionKey(pos);
-        const candId = votes[key];
-        if (!candId) return;
+        const candIds = votes[key] || [];
+        if (candIds.length === 0) return;
 
-        let candName = 'Unknown';
-        let partyName = 'Unknown';
-        elec.partyLists.forEach(p => {
-            const c = p.candidates.find(cand => cand.id === candId);
-            if (c) {
-                candName = c.name;
-                partyName = p.name;
+        candIds.forEach(candId => {
+            let candName = 'Unknown';
+            let partyName = 'Unknown';
+        
+            if (candId.startsWith('ABSTAIN__')) {
+                candName = 'Abstain';
+                partyName = '—';
+            } else {
+                elec.partyLists.forEach(p => {
+                    const c = p.candidates.find(cand => cand.id === candId);
+                    if (c) {
+                        candName = c.name;
+                        partyName = p.name;
+                    }
+                });
             }
-        });
 
-        html += `
-        <div style="border-bottom:1px solid var(--border-light); padding:0.75rem 0; display:flex; justify-content:space-between; align-items:center;">
-            <div>
-                <div style="font-size:0.75rem; color:var(--text-light); text-transform:uppercase; letter-spacing:1px; margin-bottom:2px;">${escapeHtml(pos)}</div>
-                <div style="font-weight:600; color:var(--text-dark); font-size:1rem;">${escapeHtml(candName)}</div>
-            </div>
-            <div style="text-align:right;">
-                <span style="background:var(--bg-light); padding:4px 8px; border-radius:6px; font-size:0.7rem; color:var(--text-mid); border:1px solid var(--border-light); font-weight:600;">${escapeHtml(partyName)}</span>
-            </div>
-        </div>`;
+            html += `
+            <div style="border-bottom:1px solid var(--border-light); padding:0.75rem 0; display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <div style="font-size:0.75rem; color:var(--text-light); text-transform:uppercase; letter-spacing:1px; margin-bottom:2px;">${escapeHtml(pos)}</div>
+                    <div style="font-weight:600; color:var(--text-dark); font-size:1rem;">${escapeHtml(candName)}</div>
+                </div>
+                <div style="text-align:right;">
+                    <span style="background:var(--bg-light); padding:4px 8px; border-radius:6px; font-size:0.7rem; color:var(--text-mid); border:1px solid var(--border-light); font-weight:600;">${escapeHtml(partyName)}</span>
+                </div>
+            </div>`;
+        });
     });
 
     listContainer.innerHTML = html;
@@ -667,7 +728,7 @@ async function submitVote() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 election_id:   currentElectionId,
-                candidate_ids: Object.values(votes)
+                candidate_ids: Object.values(votes).flat().filter(Boolean)
             })
         });
         
@@ -1148,14 +1209,14 @@ function renderCandidatesTab() {
     container.innerHTML = elec.partyLists.map(party => `
         <div class="admin-party-card" id="party-card-${party.id}">
             <div class="admin-party-header">
-                <div class="admin-party-header-left">
+                <div class="admin-party-header-left" style="flex:1;">
                     <div class="admin-party-icon"><i class="bi bi-people-fill"></i></div>
-                    <div id="party-name-display-${party.id}">
+                    <div id="party-name-display-${party.id}" style="flex:1;">
                         <div class="admin-party-name">${escapeHtml(party.name)}</div>
                         <div class="admin-party-count">${party.candidates.length} candidate${party.candidates.length!==1?'s':''}</div>
                     </div>
                 </div>
-                <div>
+                <div id="party-actions-${party.id}" style="display:flex; gap:8px;">
                     <button class="btn-icon-info" onclick="startEditParty('${elecId}','${party.id}')" title="Edit Party Name"><i class="bi bi-pencil-fill"></i></button>
                     <button class="btn-icon-danger" onclick="deleteParty('${elecId}','${party.id}')" title="Delete Party"><i class="bi bi-trash-fill"></i></button>
                 </div>
@@ -1188,11 +1249,11 @@ function renderPositionManager(elec) {
     if (!container) return;
     if (!elec) { container.innerHTML = ''; return; }
     container.innerHTML = elec.customPositions.map((pos, idx) => `
-        <div class="position-tag-item">
-            <i class="bi bi-briefcase-fill" style="font-size:.75rem;"></i>
-            ${escapeHtml(pos)}
-            <button onclick="deletePosition('${elec.id}',${idx})" title="Remove"><i class="bi bi-x"></i></button>
-        </div>`).join('');
+            <div class="position-tag-item">
+                <i class="bi bi-briefcase-fill" style="font-size:.75rem;"></i>
+                ${escapeHtml(pos)}
+                <button onclick="deletePosition('${elec.id}',${idx})" title="Remove"><i class="bi bi-x"></i></button>
+            </div>`).join('');
 }
 
 function showAddPositionForm() {
@@ -1371,11 +1432,15 @@ function startEditParty(elecId, partyId) {
     if (!party) return;
     const displayEl = document.getElementById(`party-name-display-${partyId}`);
     displayEl.innerHTML = `
-        <div style="display:flex; gap:8px; align-items:center;">
-            <input type="text" id="edit-party-name-${partyId}" class="field-input" value="${escapeHtml(party.name)}" style="height:32px;font-size:.9rem;padding:0 10px; width:200px;">
-            <button class="btn-success-sm" onclick="saveEditParty('${elecId}','${partyId}')" style="padding:0 8px; height:32px;" title="Save"><i class="bi bi-check-lg"></i></button>
-            <button class="btn-ghost-sm" onclick="renderCandidatesTab()" style="padding:0 8px; height:32px;" title="Cancel"><i class="bi bi-x-lg"></i></button>
+        <div style="display:flex; gap:6px; align-items:center; width:100%;">
+            <input type="text" id="edit-party-name-${partyId}" class="field-input" value="${escapeHtml(party.name)}" style="height:32px;font-size:.9rem;padding:0 10px; flex:1; min-width:120px;">
+            <button class="btn-success-sm" onclick="saveEditParty('${elecId}','${partyId}')" style="padding:0 10px; height:32px; border-radius:6px;" title="Save"><i class="bi bi-check-lg"></i></button>
+            <button onclick="renderCandidatesTab()" style="padding:0 10px; height:32px; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:white; border-radius:6px; cursor:pointer;" title="Cancel"><i class="bi bi-x-lg"></i></button>
         </div>`;
+        
+    // Hide the normal edit/delete buttons while renaming to prevent UI clutter
+    const actionsDiv = document.getElementById(`party-actions-${partyId}`);
+    if (actionsDiv) actionsDiv.style.display = 'none';
 }
 async function saveEditParty(elecId, partyId) {
     const newName = document.getElementById(`edit-party-name-${partyId}`)?.value.trim();
@@ -1417,10 +1482,9 @@ async function addCandidate() {
 
     const party = elec.partyLists.find(p => p.id === partyId);
     if (!party) { showToast('Party not found.','error'); return; }
-    if (party.candidates.some(c => c.position === position)) {
-        showToast(`${party.name} already has a candidate for ${position}.`,'error'); return;
-    }
 
+    // The client-side check preventing multiple candidates for the same position in a party has been removed.
+    // This allows adding multiple candidates (e.g., Senators) to a single partylist.
     const btn = document.querySelector('#candidate-form .btn-success-sm');
     if (btn) {
         btn.disabled = true;
@@ -1810,6 +1874,9 @@ async function loadElectionsFromDB() {
 
                 for (const [posName, candidates] of Object.entries(e.positions || {})) {
                     candidates.forEach(c => {
+                        voteTallies[c.candidate_id] = c.votes;
+                        if (c.candidate_id.startsWith('ABSTAIN__')) return;
+
                         const partyName = c.party || 'Independent';
                         if (!partyMap[partyName]) {
                             partyMap[partyName] = {
@@ -1823,7 +1890,6 @@ async function loadElectionsFromDB() {
                             name: c.name,
                             position: posName
                         });
-                        voteTallies[c.candidate_id] = c.votes;
                     });
                 }
 
@@ -1838,6 +1904,7 @@ async function loadElectionsFromDB() {
                     voted:          e.user_voted || false,
                     partyLists:     Object.values(partyMap),
                     customPositions,
+                    positionInfo:   e.position_info || {},
                     voteTallies,
                     archivedTallies: []
                 };

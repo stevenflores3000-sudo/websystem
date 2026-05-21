@@ -2,7 +2,11 @@
 include 'db_connect.php';
 
 // Ensure the table exists
-$conn->query("CREATE TABLE IF NOT EXISTS election_position (id INT AUTO_INCREMENT PRIMARY KEY, election_id VARCHAR(50), title VARCHAR(100))");
+$conn->query("CREATE TABLE IF NOT EXISTS election_position (id INT AUTO_INCREMENT PRIMARY KEY, election_id VARCHAR(50), title VARCHAR(100), max_votes INT DEFAULT 1)");
+$checkMax = $conn->query("SHOW COLUMNS FROM election_position LIKE 'max_votes'");
+if ($checkMax && $checkMax->num_rows == 0) {
+    $conn->query("ALTER TABLE election_position ADD COLUMN max_votes INT DEFAULT 1");
+}
 
 // Insert missing positions from the candidate table into the election_position table
 $query = "

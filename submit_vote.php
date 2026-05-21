@@ -71,6 +71,19 @@ try {
         }
     }
 
+    // 3.6. Ensure the database allows virtual 'Abstain' candidates which don't exist in the candidate table.
+    $checkFk = $conn->query("SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'vote' AND COLUMN_NAME = 'candidate_id' AND REFERENCED_TABLE_NAME = 'candidate'");
+    if ($checkFk && $checkFk->num_rows > 0) {
+        while ($row = $checkFk->fetch_assoc()) {
+            $fkName = $row['CONSTRAINT_NAME'];
+            try {
+                $conn->query("ALTER TABLE vote DROP FOREIGN KEY `$fkName`");
+            } catch (Exception $fkEx) {
+                // Ignore failure
+            }
+        }
+    }
+
     // 4. Start a transaction and insert votes
     // (Moved inside the try block so any fatal exceptions are safely caught and returned as JSON)
     $conn->begin_transaction();
