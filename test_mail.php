@@ -1,4 +1,10 @@
 <?php
+session_start();
+// Security check: ensure only admins can run this script
+if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
+    die("Unauthorized access.");
+}
+
 // Quick test to see if PHPMailer is working
 require 'vendor/autoload.php';
 require 'config.php';

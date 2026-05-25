@@ -468,6 +468,7 @@
                 <a class="sidebar-link" id="nav-results" onclick="switchAdminTab('results')"><i class="bi bi-bar-chart-fill"></i><span>Results</span></a>
                 <a class="sidebar-link" id="nav-archive" onclick="switchAdminTab('archive')"><i class="bi bi-archive-fill"></i><span>Archive</span></a>
                 <a class="sidebar-link" id="nav-voters" onclick="switchAdminTab('voters')"><i class="bi bi-people-fill"></i><span>Voter Tracker</span></a>
+                <a class="sidebar-link" id="nav-audit" onclick="switchAdminTab('audit')"><i class="bi bi-journal-text"></i><span>Audit Logs</span></a>
             </nav>
             <button class="sidebar-logout mb-2" style="background:rgba(255,255,255,0.05); color:var(--text-light); border-radius:12px; margin-bottom: 8px;" onclick="showAdminPasswordModal()"><i class="bi bi-key-fill me-2"></i>Change Password</button>
             <button class="sidebar-logout" onclick="showAuthPage()"><i class="bi bi-box-arrow-left me-2"></i>Logout</button>
@@ -632,6 +633,19 @@
 
                 <!-- Table -->
                 <div id="voter-tracker-table-wrap" class="tracker-table-wrap"></div>
+            </div>
+
+            <!-- AUDIT LOGS TAB -->
+            <div id="tab-audit" class="admin-tab d-none">
+                <div class="admin-page-header">
+                    <div>
+                        <h1 class="admin-page-title">System Audit Logs</h1>
+                        <p class="admin-page-sub">Track administrator actions, configurations, and system modifications securely.</p>
+                    </div>
+                    <button class="btn-outline-sm" onclick="fetchAuditLogs()"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button>
+                </div>
+                <div id="audit-list-container" class="tracker-table-wrap" style="min-height: 400px; background: rgba(0,0,0,0.2); border-radius: 16px;">
+                </div>
             </div>
         </main>
     </div>

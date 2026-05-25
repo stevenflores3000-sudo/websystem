@@ -1,4 +1,10 @@
 <?php
+session_start();
+// Security check: ensure only admins can run this script
+if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
+    die("Unauthorized access.");
+}
+
 include 'db_connect.php';
 
 echo "<div style='font-family: sans-serif; padding: 2rem;'>";

@@ -1,4 +1,6 @@
 <?php
+ini_set('display_errors', 0);
+error_reporting(0);
 // ═══════════════════════════════════════════════════════════════════════
 //  get_stats.php
 //  JSON API — returns three payloads for the Admin Dashboard:
@@ -18,18 +20,31 @@ include 'db_connect.php';
 
 header('Content-Type: application/json');
 
-// ── Auth guard (only logged-in admins should call this) ──────────────
-// Comment out the block below if you want to test without session auth
-/*
-if (!isset($_SESSION['user_id']) || ($_SESSION['role'] ?? '') !== 'admin') {
+$section     = $_GET['section']     ?? 'all';
+$election_id = $_GET['election_id'] ?? null;
+
+// ── Auth guard ──────────────
+if (!isset($_SESSION['user_id'])) {
+    // Allow public access to 'tally' but only when unauthenticated? No, let's just deny all if not logged in.
     http_response_code(403);
     echo json_encode(['success' => false, 'error' => 'Forbidden']);
     exit();
 }
-*/
 
-$section     = $_GET['section']     ?? 'all';
-$election_id = $_GET['election_id'] ?? null;
+$role = $_SESSION['role'] ?? '';
+
+// Voters can only access tally and receipt
+if ($role === 'voter') {
+    if ($section !== 'tally' && $section !== 'receipt') {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Forbidden']);
+        exit();
+    }
+} elseif ($role !== 'admin') {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'error' => 'Forbidden']);
+    exit();
+}
 
 $out = ['success' => true];
 
@@ -353,6 +368,24 @@ if ($section === 'receipt') {
             $stmt->close();
             $out['receipt'] = $receipt;
         }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  5. AUDIT LOGS
+//  Returns the latest 200 activity logs recorded by admins.
+// ══════════════════════════════════════════════════════════════════════
+if ($section === 'audit_logs') {
+    $stmt = $conn->prepare("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200");
+    if ($stmt) {
+        $stmt->execute();
+        $res = $stmt->get_result();
+        $logs = [];
+        while ($row = $res->fetch_assoc()) {
+            $logs[] = $row;
+        }
+        $stmt->close();
+        $out['audit_logs'] = $logs;
     }
 }
 

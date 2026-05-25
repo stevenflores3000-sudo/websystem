@@ -779,8 +779,7 @@ async function submitVote() {
 // ══════════════════════════════════════════════════════
 //  ADMIN TABS
 // ══════════════════════════════════════════════════════
-const ADMIN_TABS = ['overview','elections','candidates','results','archive','voters'];
-
+const ADMIN_TABS = ['overview','elections','candidates','results','archive','voters', 'audit'];
 function switchAdminTab(tab) {
     ADMIN_TABS.forEach(t => {
         const tabEl = document.getElementById(`tab-${t}`);
@@ -799,7 +798,36 @@ function switchAdminTab(tab) {
     if (tab === 'results')    { populateResultsFilter(); renderResults(); startClock(); }
     if (tab === 'archive')    renderArchive();
     if (tab === 'voters')     fetchVoterData();
+    if (tab === 'audit')      fetchAuditLogs();
     if (tab !== 'results')    stopClock();
+}
+
+async function fetchAuditLogs() {
+    const container = document.getElementById('audit-list-container');
+    if (!container) return; // Failsafe if HTML isn't added yet
+
+    container.innerHTML = '<div class="tracker-loading"><i class="bi bi-arrow-repeat spin me-2"></i>Loading audit logs...</div>';
+
+    try {
+        const res = await fetch('get_stats.php?section=audit_logs');
+        const data = await res.json();
+        
+        if (data.success && data.audit_logs) {
+            if (data.audit_logs.length === 0) {
+                container.innerHTML = '<div class="admin-empty-state"><i class="bi bi-journal-text"></i>No audit logs found.</div>';
+                return;
+            }
+            container.innerHTML = `
+                <table class="tracker-table">
+                    <thead><tr><th>Date & Time</th><th>Admin ID</th><th>Action</th><th>Details</th><th>IP Address</th></tr></thead>
+                    <tbody>
+                        ${data.audit_logs.map(log => `<tr><td style="white-space:nowrap;color:var(--text-mid);font-size:0.85rem;">${escapeHtml(log.created_at)}</td><td style="font-weight:600;">${escapeHtml(log.admin_id)}</td><td><span class="election-status-badge active" style="font-size:0.7rem; padding:4px 8px;">${escapeHtml(log.action)}</span></td><td>${escapeHtml(log.details)}</td><td style="color:var(--text-light);font-size:0.8rem;">${escapeHtml(log.ip_address)}</td></tr>`).join('')}
+                    </tbody>
+                </table>`;
+        }
+    } catch (err) {
+        container.innerHTML = '<div class="admin-empty-state"><i class="bi bi-exclamation-triangle"></i> Error loading logs. Check server connection.</div>';
+    }
 }
 
 // ══════════════════════════════════════════════════════

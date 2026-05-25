@@ -1,4 +1,6 @@
 <?php
+ini_set('display_errors', 0);
+error_reporting(0);
 session_start();
 include 'db_connect.php';
 header('Content-Type: application/json');
@@ -7,6 +9,24 @@ header('Content-Type: application/json');
 if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
     echo json_encode(['success' => false, 'error' => 'Unauthorized access.']);
     exit;
+}
+
+// Create audit_log table if it doesn't exist
+$conn->query("CREATE TABLE IF NOT EXISTS audit_log (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    admin_id VARCHAR(50),
+    action VARCHAR(50),
+    details TEXT,
+    ip_address VARCHAR(45),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)");
+
+function log_audit($conn, $action, $details) {
+    $admin_id = $_SESSION['user_id'] ?? 'unknown';
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+    $stmt = $conn->prepare("INSERT INTO audit_log (admin_id, action, details, ip_address) VALUES (?, ?, ?, ?)");
+    $stmt->bind_param('ssss', $admin_id, $action, $details, $ip);
+    $stmt->execute();
 }
 
 $data = json_decode(file_get_contents('php://input'), true);
@@ -34,6 +54,7 @@ try {
         $stmt->bind_param('ssss', $id, $title, $date, $status);
         $stmt->execute();
         
+        log_audit($conn, 'ADD_ELECTION', "Created election: $title (ID: $id)");
         echo json_encode(['success' => true, 'election_id' => $id]);
     }
     // ── 2. Change Election Status (Active/Upcoming/Closed) ────
@@ -45,6 +66,7 @@ try {
         $stmt->bind_param('ss', $status, $elec_id);
         $stmt->execute();
         
+        log_audit($conn, 'CHANGE_ELECTION_STATUS', "Changed election $elec_id status to $status");
         echo json_encode(['success' => true]);
     }
     // ── 3. Create a Party List ────────────────────────────────
@@ -69,6 +91,7 @@ try {
         $stmt->bind_param('ss', $id, $name);
         $stmt->execute();
         
+        log_audit($conn, 'ADD_PARTY', "Created party list: $name (ID: $id)");
         echo json_encode(['success' => true, 'party_id' => $id]);
     }
     // ── 4. Add a Candidate ────────────────────────────────────
@@ -94,6 +117,7 @@ try {
         $stmtC->bind_param('sssss', $c_id, $name, $pos, $party_id, $elec_id);
         $stmtC->execute();
         
+        log_audit($conn, 'ADD_CANDIDATE', "Added candidate: $name for $pos in party $party_id (Election: $elec_id)");
         echo json_encode(['success' => true]);
     }
     // ── 5. Delete a Candidate ─────────────────────────────────
@@ -108,6 +132,7 @@ try {
         $stmtC->bind_param('s', $cand_id);
         $stmtC->execute();
         
+        log_audit($conn, 'DELETE_CANDIDATE', "Deleted candidate ID: $cand_id");
         echo json_encode(['success' => true]);
     }
     // ── 6. Delete a Party ─────────────────────────────────────
@@ -135,6 +160,7 @@ try {
         $stmtP->bind_param('s', $party_id);
         $stmtP->execute();
         
+        log_audit($conn, 'DELETE_PARTY', "Deleted party list ID: $party_id");
         echo json_encode(['success' => true]);
     }
     // ── 6.5. Edit a Party ─────────────────────────────────────
@@ -146,6 +172,7 @@ try {
         $stmtP->bind_param('ss', $new_name, $party_id);
         $stmtP->execute();
         
+        log_audit($conn, 'EDIT_PARTY', "Renamed party $party_id to $new_name");
         echo json_encode(['success' => true]);
     }
     // ── 7. Edit a Candidate ───────────────────────────────────
@@ -165,6 +192,7 @@ try {
             $stmtC->execute();
         }
         
+        log_audit($conn, 'EDIT_CANDIDATE', "Edited candidate ID: $cand_id");
         echo json_encode(['success' => true]);
     }
     // ── 8. Delete an Election ─────────────────────────────────
@@ -184,6 +212,7 @@ try {
         $stmtDelE->bind_param('s', $elec_id);
         $stmtDelE->execute();
         
+        log_audit($conn, 'DELETE_ELECTION', "Deleted election ID: $elec_id");
         echo json_encode(['success' => true]);
     }
     // ── 9. Edit an Election ───────────────────────────────────
@@ -196,6 +225,7 @@ try {
         $stmt->bind_param('sss', $title, $date, $elec_id);
         $stmt->execute();
         
+        log_audit($conn, 'EDIT_ELECTION', "Edited election ID: $elec_id to $title");
         echo json_encode(['success' => true]);
     }
     // ── 10. Change Admin Password ──────────────────────────────
@@ -216,6 +246,7 @@ try {
                 $stmtU->bind_param('ss', $hash, $admin_id);
                 $stmtU->execute();
                 
+                log_audit($conn, 'CHANGE_PASSWORD', "Admin changed their password.");
                 echo json_encode(['success' => true]);
             } else {
                 echo json_encode(['success' => false, 'error' => 'Incorrect current password.']);
@@ -250,6 +281,7 @@ try {
         $stmt->bind_param('ssi', $elec_id, $title, $max_votes);
         $stmt->execute();
         
+        log_audit($conn, 'ADD_POSITION', "Added position $title to election $elec_id (Max votes: $max_votes)");
         echo json_encode(['success' => true]);
     }
     // ── 12. Delete Custom Position ─────────────────────────────
@@ -282,6 +314,7 @@ try {
         $stmt->bind_param('ss', $elec_id, $title);
         $stmt->execute();
         
+        log_audit($conn, 'DELETE_POSITION', "Deleted position $title from election $elec_id");
         echo json_encode(['success' => true]);
     }
 } catch (Exception $e) {
