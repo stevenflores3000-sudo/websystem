@@ -45,6 +45,23 @@ try {
     $pdo = new PDO("mysql:host=localhost;dbname=voting_system;charset=utf8mb4", "root", "");
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
+    // Failsafes to dynamically match required B2B schema adjustments
+    $pdo->exec("ALTER TABLE vote ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(64) NULL");
+    $pdo->exec("ALTER TABLE vote ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+    $pdo->exec("ALTER TABLE user ADD COLUMN IF NOT EXISTS has_voted TINYINT(1) DEFAULT 0");
+
+    // 1. Enforce strict session verification & duplicate guard
+    $userStmt = $pdo->prepare("SELECT has_voted FROM user WHERE id = :user_id");
+    $userStmt->execute([':user_id' => $user_id]);
+    $userCheck = $userStmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($userCheck && $userCheck['has_voted'] == 1) {
+        session_unset();
+        session_destroy();
+        echo json_encode(["success" => false, "message" => "Transaction Rejected: Manifest already committed for this account."]);
+        exit;
+    }
+
     // Initialize explicit PDO transaction
     $pdo->beginTransaction();
 
@@ -58,7 +75,7 @@ try {
     foreach ($votes as $position_name => $candidate_ids) {
         if (!is_array($candidate_ids)) continue;
 
-        // 1. Pull position rules
+        // 2. Pull configuration bounds
         $ruleStmt->execute([':position_name' => $position_name]);
         $rule = $ruleStmt->fetch(PDO::FETCH_ASSOC);
 
@@ -71,14 +88,14 @@ try {
         $max_selection = (int) $rule['max_selection'];
         $max_per_party = (int) $rule['max_per_party'];
 
-        // 2. Check total selection count
+        // 3. Check total category selection threshold
         if (count($candidate_ids) > $max_selection) {
             $pdo->rollBack();
-            echo json_encode(["success" => false, "message" => "Over-voting detected."]);
+            echo json_encode(["success" => false, "message" => "Transaction Rejected: Category max selection exceeded."]);
             exit;
         }
 
-        // 3 & 4. Check partylist seat allocation limits
+        // 4. Check vendor group alliance allocation bounds
         $partyCounts = [];
         foreach ($candidate_ids as $candidate_id) {
             $partyStmt->execute([':candidate_id' => $candidate_id]);
@@ -93,15 +110,16 @@ try {
 
                 if ($partyCounts[$party_name] > $max_per_party) {
                     $pdo->rollBack();
-                    echo json_encode(["success" => false, "message" => "Partylist seat allocation exceeded."]);
+                    echo json_encode(["success" => false, "message" => "Transaction Rejected: Vendor group alliance ceiling exceeded."]);
                     exit;
                 }
             }
         }
     }
 
-    // 5. Final loop inserting rows into the vote ledger
-    $insertStmt = $pdo->prepare("INSERT INTO vote (user_id, election_id, candidate_id) VALUES (:user_id, :election_id, :candidate_id)");
+    // 5. Generate secure hash and insert payload to ledger
+    $transaction_id = bin2hex(random_bytes(16));
+    $insertStmt = $pdo->prepare("INSERT INTO vote (user_id, election_id, candidate_id, transaction_id) VALUES (:user_id, :election_id, :candidate_id, :txn_id)");
     
     foreach ($votes as $position_name => $candidate_ids) {
         if (!is_array($candidate_ids)) continue;
@@ -109,20 +127,28 @@ try {
             $insertStmt->execute([
                 ':user_id'      => $user_id,
                 ':election_id'  => $election_id,
-                ':candidate_id' => $candidate_id
+                ':candidate_id' => $candidate_id,
+                ':txn_id'       => $transaction_id
             ]);
         }
     }
 
+    // 6. Lock account from further transactions
+    $updateUser = $pdo->prepare("UPDATE user SET has_voted = 1 WHERE id = :user_id");
+    $updateUser->execute([':user_id' => $user_id]);
+
     // Commit transaction safely
     $pdo->commit();
-    echo json_encode(["success" => true, "message" => "Vote successfully validated and recorded."]);
+    
+    // Invoke print-ready redirect trigger
+    header("Location: receipt.php?transaction_id=" . $transaction_id);
+    exit;
 
 } catch (Exception $e) {
     if (isset($pdo) && $pdo->inTransaction()) {
         $pdo->rollBack();
     }
-    error_log("Vote Security Engine Error: " . $e->getMessage());
-    echo json_encode(["success" => false, "message" => "An error occurred while processing your ballot."]);
+    error_log("Trans-Validation Gateway Error: " . $e->getMessage());
+    echo json_encode(["success" => false, "message" => "An internal system error occurred while processing your manifest."]);
 }
 ?>

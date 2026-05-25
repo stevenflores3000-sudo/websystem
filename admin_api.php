@@ -11,6 +11,33 @@ if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
     exit;
 }
 
+// ── DYNAMIC ADMINISTRATIVE CONFIGURATOR POLICY ───────────
+if (isset($_POST['position_name']) && isset($_POST['max_selection']) && isset($_POST['max_per_party'])) {
+    try {
+        $pdo = new PDO("mysql:host=localhost;dbname=voting_system;charset=utf8mb4", "root", "");
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        
+        $pdo->exec("CREATE TABLE IF NOT EXISTS position_rules (
+            position_name VARCHAR(100) PRIMARY KEY,
+            max_selection INT DEFAULT 1,
+            max_per_party INT DEFAULT 1
+        )");
+
+        $stmt = $pdo->prepare("INSERT INTO position_rules (position_name, max_selection, max_per_party) VALUES (:name, :max_sel, :max_party) ON DUPLICATE KEY UPDATE max_selection = :max_sel, max_per_party = :max_party");
+        $stmt->execute([
+            ':name'      => $_POST['position_name'],
+            ':max_sel'   => $_POST['max_selection'],
+            ':max_party' => $_POST['max_per_party']
+        ]);
+        
+        echo json_encode(["success" => true, "message" => "Policy registry bounds synchronized successfully."]);
+        exit;
+    } catch (Exception $e) {
+        echo json_encode(["success" => false, "error" => "Policy Configurator Error: " . $e->getMessage()]);
+        exit;
+    }
+}
+
 // Create audit_log table if it doesn't exist
 $conn->query("CREATE TABLE IF NOT EXISTS audit_log (
     id INT AUTO_INCREMENT PRIMARY KEY,

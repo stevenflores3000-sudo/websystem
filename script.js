@@ -16,6 +16,8 @@ let sessionStartTime    = Date.now();
 let chartInstances      = {};
 let auditLogOffset      = 0;
 const AUDIT_LOG_LIMIT   = 50;
+let allocationOffset    = 0;
+const ALLOCATION_LIMIT  = 50;
 
 // ── Elections store (populated from get_stats.php) ─────────────────
 let elections = [];
