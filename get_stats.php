@@ -373,11 +373,31 @@ if ($section === 'receipt') {
 
 // ══════════════════════════════════════════════════════════════════════
 //  5. AUDIT LOGS
-//  Returns the latest 200 activity logs recorded by admins.
+//  Returns the latest 50 activity logs recorded by admins.
 // ══════════════════════════════════════════════════════════════════════
 if ($section === 'audit_logs') {
-    $stmt = $conn->prepare("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200");
+    // Ensure the table exists so the query doesn't crash if it's empty
+    $conn->query("CREATE TABLE IF NOT EXISTS audit_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        admin_id VARCHAR(50),
+        action VARCHAR(50),
+        details TEXT,
+        ip_address VARCHAR(45),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+
+    // Ensure the database is indexed for fast date sorting
+    $checkIdx = $conn->query("SHOW INDEX FROM audit_log WHERE Key_name = 'idx_created_at'");
+    if ($checkIdx && $checkIdx->num_rows == 0) {
+        $conn->query("ALTER TABLE audit_log ADD INDEX idx_created_at (created_at)");
+    }
+
+    $offset = isset($_GET['offset']) ? (int)$_GET['offset'] : 0;
+    $limit  = 50;
+
+    $stmt = $conn->prepare("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ? OFFSET ?");
     if ($stmt) {
+        $stmt->bind_param('ii', $limit, $offset);
         $stmt->execute();
         $res = $stmt->get_result();
         $logs = [];

@@ -14,6 +14,8 @@ let votes               = {};
 let clockInterval       = null;
 let sessionStartTime    = Date.now();
 let chartInstances      = {};
+let auditLogOffset      = 0;
+const AUDIT_LOG_LIMIT   = 50;
 
 // ── Elections store (populated from get_stats.php) ─────────────────
 let elections = [];
@@ -802,31 +804,73 @@ function switchAdminTab(tab) {
     if (tab !== 'results')    stopClock();
 }
 
-async function fetchAuditLogs() {
+async function fetchAuditLogs(loadMore = false) {
     const container = document.getElementById('audit-list-container');
     if (!container) return; // Failsafe if HTML isn't added yet
 
-    container.innerHTML = '<div class="tracker-loading"><i class="bi bi-arrow-repeat spin me-2"></i>Loading audit logs...</div>';
+    if (!loadMore) {
+        auditLogOffset = 0;
+        container.innerHTML = '<div class="tracker-loading"><i class="bi bi-arrow-repeat spin me-2"></i>Loading audit logs...</div>';
+    } else {
+        const btn = document.getElementById('audit-load-more-btn');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="bi bi-arrow-repeat spin me-1"></i>Loading...';
+        }
+    }
 
     try {
-        const res = await fetch('get_stats.php?section=audit_logs');
+        const res = await fetch(`get_stats.php?section=audit_logs&offset=${auditLogOffset}`);
         const data = await res.json();
         
         if (data.success && data.audit_logs) {
-            if (data.audit_logs.length === 0) {
+            if (!loadMore && data.audit_logs.length === 0) {
                 container.innerHTML = '<div class="admin-empty-state"><i class="bi bi-journal-text"></i>No audit logs found.</div>';
                 return;
             }
-            container.innerHTML = `
-                <table class="tracker-table">
-                    <thead><tr><th>Date & Time</th><th>Admin ID</th><th>Action</th><th>Details</th><th>IP Address</th></tr></thead>
-                    <tbody>
-                        ${data.audit_logs.map(log => `<tr><td style="white-space:nowrap;color:var(--text-mid);font-size:0.85rem;">${escapeHtml(log.created_at)}</td><td style="font-weight:600;">${escapeHtml(log.admin_id)}</td><td><span class="election-status-badge active" style="font-size:0.7rem; padding:4px 8px;">${escapeHtml(log.action)}</span></td><td>${escapeHtml(log.details)}</td><td style="color:var(--text-light);font-size:0.8rem;">${escapeHtml(log.ip_address)}</td></tr>`).join('')}
-                    </tbody>
-                </table>`;
+            
+            const rowsHtml = data.audit_logs.map(log => `<tr><td style="white-space:nowrap;color:var(--text-mid);font-size:0.85rem;">${escapeHtml(log.created_at)}</td><td style="font-weight:600;">${escapeHtml(log.admin_id)}</td><td><span class="election-status-badge active" style="font-size:0.7rem; padding:4px 8px;">${escapeHtml(log.action)}</span></td><td>${escapeHtml(log.details)}</td><td style="color:var(--text-light);font-size:0.8rem;">${escapeHtml(log.ip_address)}</td></tr>`).join('');
+            
+            if (!loadMore) {
+                let html = `
+                    <table class="tracker-table">
+                        <thead><tr><th>Date & Time</th><th>Admin ID</th><th>Action</th><th>Details</th><th>IP Address</th></tr></thead>
+                        <tbody id="audit-table-body">${rowsHtml}</tbody>
+                    </table>`;
+                
+                if (data.audit_logs.length === AUDIT_LOG_LIMIT) {
+                    html += `<div style="text-align: center; margin-top: 1rem; padding-bottom: 1rem;" id="audit-load-more-wrap"><button id="audit-load-more-btn" class="btn-outline-sm" onclick="fetchAuditLogs(true)"><i class="bi bi-arrow-down-circle me-1"></i>Load More</button></div>`;
+                }
+                container.innerHTML = html;
+            } else {
+                const tbody = document.getElementById('audit-table-body');
+                if (tbody) tbody.insertAdjacentHTML('beforeend', rowsHtml);
+                
+                const btnWrap = document.getElementById('audit-load-more-wrap');
+                const btn = document.getElementById('audit-load-more-btn');
+                if (data.audit_logs.length < AUDIT_LOG_LIMIT) {
+                    if (btnWrap) btnWrap.style.display = 'none';
+                } else if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="bi bi-arrow-down-circle me-1"></i>Load More';
+                }
+            }
+            
+            auditLogOffset += data.audit_logs.length;
+        } else {
+            throw new Error(data.error || "Failed to load audit logs");
         }
     } catch (err) {
-        container.innerHTML = '<div class="admin-empty-state"><i class="bi bi-exclamation-triangle"></i> Error loading logs. Check server connection.</div>';
+        if (!loadMore) {
+            container.innerHTML = '<div class="admin-empty-state"><i class="bi bi-exclamation-triangle"></i> Error loading logs. Check server connection.</div>';
+        } else {
+            showToast('Error loading more logs.', 'error');
+            const btn = document.getElementById('audit-load-more-btn');
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-arrow-down-circle me-1"></i>Load More';
+            }
+        }
     }
 }
 
@@ -2003,4 +2047,30 @@ window.addEventListener('DOMContentLoaded', async () => {
     // Handle PHP redirect params first; if not a redirect, show auth page
     const handled = handleUrlParams();
     if (!handled) showAuthPage();
+});
+
+// ══════════════════════════════════════════════════════
+//  DYNAMIC CHECKBOX LIMIT VALIDATOR
+// ══════════════════════════════════════════════════════
+document.addEventListener('change', function(event) {
+    const target = event.target;
+
+    // 1. Verify the event originated from a ballot checkbox
+    if (target.type === 'checkbox' && target.hasAttribute('data-position') && target.hasAttribute('data-limit')) {
+        
+        const position = target.getAttribute('data-position');
+        const limit    = parseInt(target.getAttribute('data-limit'), 10);
+        const party    = target.getAttribute('data-party');
+
+        // Query the DOM to calculate how many total checkboxes are currently selected inside that specific position group
+        const groupCheckboxes = document.querySelectorAll(`input[type="checkbox"][data-position="${position}"]`);
+
+        let totalChecked = 0;
+        // If totalChecked >= data-limit, instantly find all other UNCHECKED checkboxes belonging to that same political position and set their disabled state to true.
+        // If totalChecked drops below the limit, immediately re-enable all checkboxes in that position group (disabled = false).
+        const limitReached = (totalChecked >= limit);
+        groupCheckboxes.forEach(cb => {
+            if (!cb.checked) cb.disabled = limitReached;
+        });
+    }
 });

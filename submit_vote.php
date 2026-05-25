@@ -32,101 +32,97 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit();
 }
 
-// 2. Get and decode the POST body
-$data = json_decode(file_get_contents('php://input'), true);
-
-$election_id   = $data['election_id'] ?? null;
-$candidate_ids = $data['candidate_ids'] ?? [];
+$election_id   = $_POST['election_id'] ?? null;
 $user_id       = $_SESSION['user_id'];
 
-if (empty($election_id) || empty($candidate_ids) || !is_array($candidate_ids)) {
-    echo json_encode(['success' => false, 'error' => 'Invalid or incomplete vote data.']);
+if (empty($election_id) || empty($_POST['votes']) || !is_array($_POST['votes'])) {
+    echo json_encode(['success' => false, 'message' => 'Invalid or incomplete vote data.']);
     exit();
 }
 
 try {
-    // 3. Check if the user has already voted in this election
-    $stmt = $conn->prepare("SELECT COUNT(*) FROM vote WHERE user_id = ? AND election_id = ?");
-    if (!$stmt) { throw new Exception("Prepare failed: " . $conn->error); }
-    
-    $stmt->bind_param('ss', $user_id, $election_id);
-    $stmt->execute();
-    $stmt->bind_result($vote_count);
-    $stmt->fetch();
-    $stmt->close();
+    // Establish PDO connection explicitly for this strict validation requirement
+    $pdo = new PDO("mysql:host=localhost;dbname=voting_system;charset=utf8mb4", "root", "");
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
-    if ($vote_count > 0) {
-        echo json_encode(['success' => false, 'error' => 'You have already voted in this election.']);
-        exit();
-    }
+    // Initialize explicit PDO transaction
+    $pdo->beginTransaction();
 
-    // 3.5. Ensure the database allows multi-candidate ballots. 
-    // The 'unique_voter' key prevents inserting multiple candidates per election.
-    $checkIdx = $conn->query("SHOW INDEX FROM vote WHERE Key_name = 'unique_voter'");
-    if ($checkIdx && $checkIdx->num_rows > 0) {
-        try {
-            $conn->query("ALTER TABLE vote DROP INDEX unique_voter");
-        } catch (Exception $idxEx) {
-            throw new Exception("Could not automatically remove the restrictive unique_voter rule. Please open phpMyAdmin, select your database, go to the SQL tab, and run: ALTER TABLE vote DROP INDEX unique_voter;");
+    $votes = $_POST['votes'];
+
+    // Prepare rule validation queries
+    $ruleStmt = $pdo->prepare("SELECT max_selection, max_per_party FROM position_rules WHERE position_name = :position_name");
+    $partyStmt = $pdo->prepare("SELECT party_name FROM candidates WHERE id = :candidate_id");
+
+    // Loop through each position in the payload
+    foreach ($votes as $position_name => $candidate_ids) {
+        if (!is_array($candidate_ids)) continue;
+
+        // 1. Pull position rules
+        $ruleStmt->execute([':position_name' => $position_name]);
+        $rule = $ruleStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$rule) {
+            $pdo->rollBack();
+            echo json_encode(["success" => false, "message" => "Security Violation: Invalid position configuration."]);
+            exit;
         }
-    }
 
-    // 3.6. Ensure the database allows virtual 'Abstain' candidates which don't exist in the candidate table.
-    $checkFk = $conn->query("SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'vote' AND COLUMN_NAME = 'candidate_id' AND REFERENCED_TABLE_NAME = 'candidate'");
-    if ($checkFk && $checkFk->num_rows > 0) {
-        while ($row = $checkFk->fetch_assoc()) {
-            $fkName = $row['CONSTRAINT_NAME'];
-            try {
-                $conn->query("ALTER TABLE vote DROP FOREIGN KEY `$fkName`");
-            } catch (Exception $fkEx) {
-                // Ignore failure
+        $max_selection = (int) $rule['max_selection'];
+        $max_per_party = (int) $rule['max_per_party'];
+
+        // 2. Check total selection count
+        if (count($candidate_ids) > $max_selection) {
+            $pdo->rollBack();
+            echo json_encode(["success" => false, "message" => "Over-voting detected."]);
+            exit;
+        }
+
+        // 3 & 4. Check partylist seat allocation limits
+        $partyCounts = [];
+        foreach ($candidate_ids as $candidate_id) {
+            $partyStmt->execute([':candidate_id' => $candidate_id]);
+            $cand = $partyStmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($cand) {
+                $party_name = $cand['party_name'];
+                if (!isset($partyCounts[$party_name])) {
+                    $partyCounts[$party_name] = 0;
+                }
+                $partyCounts[$party_name]++;
+
+                if ($partyCounts[$party_name] > $max_per_party) {
+                    $pdo->rollBack();
+                    echo json_encode(["success" => false, "message" => "Partylist seat allocation exceeded."]);
+                    exit;
+                }
             }
         }
     }
 
-    // 4. Start a transaction and insert votes
-    // (Moved inside the try block so any fatal exceptions are safely caught and returned as JSON)
-    $conn->begin_transaction();
-
-    // Dynamically check if the 'vote' table requires a manual VARCHAR ID (missing AUTO_INCREMENT)
-    $checkId = $conn->query("SHOW COLUMNS FROM vote LIKE 'id'");
-    $requires_manual_id = false;
-    if ($checkId && $checkId->num_rows > 0) {
-        $col = $checkId->fetch_assoc();
-        if (stripos($col['Extra'], 'auto_increment') === false && stripos($col['Type'], 'int') === false) {
-            $requires_manual_id = true;
+    // 5. Final loop inserting rows into the vote ledger
+    $insertStmt = $pdo->prepare("INSERT INTO vote (user_id, election_id, candidate_id) VALUES (:user_id, :election_id, :candidate_id)");
+    
+    foreach ($votes as $position_name => $candidate_ids) {
+        if (!is_array($candidate_ids)) continue;
+        foreach ($candidate_ids as $candidate_id) {
+            $insertStmt->execute([
+                ':user_id'      => $user_id,
+                ':election_id'  => $election_id,
+                ':candidate_id' => $candidate_id
+            ]);
         }
     }
 
-    if ($requires_manual_id) {
-        $stmt = $conn->prepare("INSERT INTO vote (id, user_id, election_id, candidate_id) VALUES (?, ?, ?, ?)");
-        if (!$stmt) { throw new Exception("Prepare failed: " . $conn->error); }
-        foreach ($candidate_ids as $candidate_id) {
-            $vote_id = 'V-' . mt_rand(100000, 999999);
-            $stmt->bind_param('ssss', $vote_id, $user_id, $election_id, $candidate_id);
-            if (!$stmt->execute()) { throw new Exception("Insert failed: " . $stmt->error); }
-        }
-    } else {
-        $stmt = $conn->prepare("INSERT INTO vote (user_id, election_id, candidate_id) VALUES (?, ?, ?)");
-        if (!$stmt) { throw new Exception("Prepare failed: " . $conn->error); }
-        foreach ($candidate_ids as $candidate_id) {
-            $stmt->bind_param('sss', $user_id, $election_id, $candidate_id);
-            if (!$stmt->execute()) { throw new Exception("Insert failed: " . $stmt->error); }
-        }
-    }
-    $stmt->close();
-
-    $conn->commit();
-    echo json_encode(['success' => true, 'message' => 'Vote submitted successfully.']);
+    // Commit transaction safely
+    $pdo->commit();
+    echo json_encode(["success" => true, "message" => "Vote successfully validated and recorded."]);
 
 } catch (Exception $e) {
-    if (isset($conn) && $conn->ping()) {
-        $conn->rollback();
+    if (isset($pdo) && $pdo->inTransaction()) {
+        $pdo->rollBack();
     }
-    error_log("Vote submission failed for user_id {$user_id}: " . $e->getMessage());
-    // Surface the EXACT database error to the UI for clear debugging
-    echo json_encode(['success' => false, 'error' => 'DB Error: ' . $e->getMessage()]);
+    error_log("Vote Security Engine Error: " . $e->getMessage());
+    echo json_encode(["success" => false, "message" => "An error occurred while processing your ballot."]);
 }
-
-$conn->close();
 ?>
