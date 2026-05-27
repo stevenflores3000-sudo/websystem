@@ -16,6 +16,7 @@ let sessionStartTime    = Date.now();
 let chartInstances      = {};
 let auditLogOffset      = 0;
 const AUDIT_LOG_LIMIT   = 50;
+let voterDataTable      = null;
 let allocationOffset    = 0;
 const ALLOCATION_LIMIT  = 50;
 
@@ -140,6 +141,14 @@ async function showReceipt(elecId) {
                         </div>
                     </div>
                 `).join('');
+                
+                const printBtn = document.getElementById('print-receipt-btn');
+                if (printBtn && data.transaction_id) {
+                    printBtn.href = `print_receipt.php?txn=${data.transaction_id}`;
+                    printBtn.classList.remove('d-none');
+                } else if (printBtn) {
+                    printBtn.classList.add('d-none');
+                }
             } else {
                 content.innerHTML = `<div style="text-align:center; color:var(--danger);">${escapeHtml(data.error || 'Failed to load receipt.')}</div>`;
             }
@@ -244,7 +253,7 @@ function validateRegister(event) {
         showToast('Please enter a valid NU email address.','error');
         event.preventDefault(); return false;
     }
-    if (!recoveryEmail || !recoveryEmail.includes('@gmail.')) {
+    if (!recoveryEmail || !recoveryEmail.toLowerCase().endsWith('@gmail.com')) {
         showToast('Please enter a valid personal Gmail address for recovery.','error');
         event.preventDefault(); return false;
     }
@@ -287,7 +296,7 @@ function processReset() {
         showToast('Please enter your personal Gmail address.','error');
         return;
     }
-    if (!email.toLowerCase().includes('@gmail.')) {
+    if (!email.toLowerCase().endsWith('@gmail.com')) {
         showToast('Please enter a valid Gmail address (e.g. yourname@gmail.com).','error');
         return;
     }
@@ -311,11 +320,6 @@ function processReset() {
 // ══════════════════════════════════════════════════════
 function handleUrlParams() {
     const params = new URLSearchParams(window.location.search);
-
-    // Preserve admin tab state if redirect specifies it
-    if (params.get('role') === 'admin') {
-        setRole('admin');
-    }
 
     // Voter login success
     if (params.get('login') === 'success') {
@@ -349,25 +353,37 @@ function handleUrlParams() {
         const msgs = {
             wrong_password: 'Incorrect password. Please try again.',
             not_found:      'No account found with those credentials.',
+            not_found_email: 'No account is registered with this Gmail address.',
             reset_failed:   'Password reset failed. Please try again.',
             invalid_reset_email: 'Please enter a valid Gmail address.',
             phpmailer_missing: 'System Error: PHPMailer is not installed. Contact the administrator.',
         };
         showToast(msgs[error] || 'An error occurred.','error');
+        
+        // Force the correct auth tab to remain open based on the error context
+        if (['not_found_email', 'invalid_reset_email', 'reset_failed', 'phpmailer_missing'].includes(error)) {
+            toggleAuthForms('forgot-section');
+        }
         cleanUrl();
+        
+        // Explicitly keep the auth page open and return true so the view doesn't reset to the default Login tab
+        document.getElementById('auth-page').classList.remove('d-none');
+        return true;
     }
 
     // Password reset sent
     if (params.get('reset') === 'sent') {
         showToast('If that Gmail is registered, a code has been sent.','info');
         cleanUrl();
+        document.getElementById('auth-page').classList.remove('d-none');
+        return true;
     }
 
     return false;
 }
 
 function cleanUrl() {
-    window.history.replaceState({}, document.title, window.location.pathname);
+    window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
 }
 
 // ══════════════════════════════════════════════════════
@@ -531,7 +547,7 @@ function buildBallot() {
     votes = {};
 
     const positions = getAllPositions(elec);
-    positions.forEach(p => { votes[getPositionKey(p)] = []; });
+    positions.forEach(p => { votes[p] = []; });
 
     positions.forEach((pos, idx) => {
         const key        = getPositionKey(pos);
@@ -539,12 +555,7 @@ function buildBallot() {
         if (candidates.length === 0) return;
         const abstainId  = 'ABSTAIN__' + pos;
         
-        // Automatically determine max votes by finding the party with the most candidates for this position
-        let maxVotes = 1;
-        elec.partyLists.forEach(p => {
-            const count = p.candidates.filter(c => c.position === pos).length;
-            if (count > maxVotes) maxVotes = count;
-        });
+        let maxVotes = elec.positionInfo[pos]?.max_votes || 1;
 
         const block = document.createElement('div');
         block.className = 'position-block';
@@ -562,7 +573,7 @@ function buildBallot() {
                     const [bg, bg2] = AVATAR_COLORS[ci % AVATAR_COLORS.length];
                     const initials  = c.name.split(' ').map(n => n[0]).join('').slice(0,2);
                     return `
-                    <div class="candidate-card" data-candidate-id="${c.id}" onclick="selectCandidate(this,'${key}', ${maxVotes})">
+                    <div class="candidate-card" data-candidate-id="${c.id}" data-position="${escapeHtml(pos)}" onclick="selectCandidate(this, ${maxVotes})">
                         <div class="cand-avatar" style="background:${bg2};color:${bg};">${initials}</div>
                         <div>
                             <div class="cand-name">${escapeHtml(c.name)}</div>
@@ -571,7 +582,7 @@ function buildBallot() {
                         <div class="cand-radio"><i class="bi bi-circle"></i></div>
                     </div>`;
                 }).join('')}
-                <div class="candidate-card" data-candidate-id="${abstainId}" onclick="selectCandidate(this,'${key}', ${maxVotes})">
+                <div class="candidate-card" data-candidate-id="${abstainId}" data-position="${escapeHtml(pos)}" onclick="selectCandidate(this, ${maxVotes})">
                     <div class="cand-avatar" style="background:#f1f5f9;color:#64748b;">AB</div>
                     <div>
                         <div class="cand-name" style="color:var(--text-mid); font-style:italic;">Abstain</div>
@@ -586,8 +597,9 @@ function buildBallot() {
     updateBallotProgress(elec);
 }
 
-function selectCandidate(cardEl, position, maxVotes) {
+function selectCandidate(cardEl, maxVotes) {
     const candId = cardEl.dataset.candidateId;
+    const position = cardEl.dataset.position;
     if (!votes[position]) votes[position] = [];
 
     if (candId.startsWith('ABSTAIN__')) {
@@ -621,7 +633,7 @@ function selectCandidate(cardEl, position, maxVotes) {
         }
     });
 
-    const chk = document.getElementById('chk-' + position);
+    const chk = document.getElementById('chk-' + getPositionKey(position));
     if (chk) {
         if (votes[position].length > 0) {
             chk.classList.add('done');
@@ -674,8 +686,7 @@ function showVoteConfirmModal() {
     // Generate the receipt summary visually linking positions to the chosen candidate
     const positions = getAllPositions(elec);
     positions.forEach(pos => {
-        const key = getPositionKey(pos);
-        const candIds = votes[key] || [];
+        const candIds = votes[pos] || [];
         if (candIds.length === 0) return;
 
         candIds.forEach(candId => {
@@ -732,7 +743,7 @@ async function submitVote() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 election_id:   currentElectionId,
-                candidate_ids: Object.values(votes).flat().filter(Boolean)
+                votes: votes
             })
         });
         
@@ -766,7 +777,7 @@ async function submitVote() {
             
             showToast('Vote submitted successfully!','success');
         } else {
-            showToast(result.error || 'An error occurred.','error');
+            showToast(result.message || result.error || 'An error occurred.','error');
             submitBtn.disabled = false;
             cancelBtn.disabled = false;
             submitBtn.innerHTML = '<i class="bi bi-send-check-fill me-1"></i>Confirm & Submit';
@@ -965,7 +976,8 @@ async function fetchVoterData() {
         const response = await fetch(url);
         const data     = await response.json();
 
-        if (!data.success || !Array.isArray(data.voter_tracker)) throw new Error('Bad response');
+        if (!data.success) throw new Error(data.error || 'Server returned an error while fetching data.');
+        if (!Array.isArray(data.voter_tracker)) throw new Error('Voter tracker data is missing or invalid.');
 
         const tracker = data.voter_tracker;
         const voted   = tracker.filter(v => v.has_voted).length;
@@ -985,19 +997,14 @@ async function fetchVoterData() {
             return;
         }
 
-        // Search input value
-        const search = (document.getElementById('tracker-search')?.value || '').toLowerCase();
+        // We let DataTables handle the text search, so we only apply the dropdown filter here
         const filter = document.getElementById('tracker-status-filter')?.value || 'all';
 
         const filtered = tracker.filter(v => {
-            const matchSearch = !search
-                || v.name.toLowerCase().includes(search)
-                || v.student_id.toLowerCase().includes(search)
-                || (v.department || '').toLowerCase().includes(search);
             const matchFilter = filter === 'all'
                 || (filter === 'voted' && v.has_voted)
                 || (filter === 'not_voted' && !v.has_voted);
-            return matchSearch && matchFilter;
+            return matchFilter;
         });
 
         if (filtered.length === 0) {
@@ -1005,8 +1012,13 @@ async function fetchVoterData() {
             return;
         }
 
+        // Destroy existing DataTable instance if it exists before redrawing the DOM
+        if (voterDataTable) {
+            voterDataTable.destroy();
+        }
+
         container.innerHTML = `
-            <table class="tracker-table">
+            <table id="voterTrackerTable" class="tracker-table display" style="width:100%">
                 <thead>
                     <tr>
                         <th>#</th>
@@ -1034,9 +1046,25 @@ async function fetchVoterData() {
                     </tr>`).join('')}
                 </tbody>
             </table>`;
+            
+        // Initialize DataTables.js
+        voterDataTable = new DataTable('#voterTrackerTable', {
+            pageLength: 10,
+            responsive: true,
+            language: {
+                search: "Search Voters:",
+                lengthMenu: "Show _MENU_ voters per page",
+                info: "Showing _START_ to _END_ of _TOTAL_ voters"
+            }
+        });
+
     } catch (err) {
         console.error('Voter tracker error:', err);
-        container.innerHTML = `<div class="admin-empty-state"><i class="bi bi-exclamation-triangle"></i>Error loading voter data. Check server connection.</div>`;
+        let errorMsg = err.message;
+        if (err.name === 'ReferenceError' && err.message.includes('DataTable')) {
+            errorMsg = 'DataTables library failed to load. Check your internet connection or disable ad-blockers.';
+        }
+        container.innerHTML = `<div class="admin-empty-state"><i class="bi bi-exclamation-triangle"></i> Error: ${escapeHtml(errorMsg)}</div>`;
     }
 }
 
@@ -1326,6 +1354,7 @@ function renderPositionManager(elec) {
             <div class="position-tag-item">
                 <i class="bi bi-briefcase-fill" style="font-size:.75rem;"></i>
                 ${escapeHtml(pos)}
+                <i class="bi bi-pencil-fill ms-2 me-1" style="cursor:pointer; font-size:.8rem; opacity:0.7;" onclick="editPosition('${elec.id}', ${idx})" title="Edit Limits"></i>
                 <button onclick="deletePosition('${elec.id}',${idx})" title="Remove"><i class="bi bi-x"></i></button>
             </div>`).join('');
 }
@@ -1336,7 +1365,10 @@ function showAddPositionForm() {
     if (!form.classList.contains('d-none')) document.getElementById('newPositionName').focus();
 }
 
-async function addCustomPosition() {
+let pendingPositionName = '';
+let editingPositionName = '';
+
+function addCustomPosition() {
     const elecId = document.getElementById('cand-election-filter').value;
     const elec   = getElection(elecId);
     if (!elec)  { showToast('Please select an election first.','error'); return; }
@@ -1347,31 +1379,89 @@ async function addCustomPosition() {
         showToast('Position already exists.','error'); return;
     }
     
-    const btn = document.querySelector('#add-position-form .btn-primary-sm');
+    pendingPositionName = name;
+    editingPositionName = '';
+    document.getElementById('cfgNameGroup').classList.add('d-none');
+    document.getElementById('position-config-name-display').textContent = `Configuration for ${escapeHtml(name)}`;
+    document.getElementById('cfgMaxVotes').value = "1";
+    document.getElementById('cfgMaxCand').value = "10";
+    document.getElementById('cfgMaxParty').value = "1";
+    document.getElementById('position-config-modal-overlay').classList.remove('d-none');
+}
+
+function editPosition(elecId, idx) {
+    const elec = getElection(elecId);
+    if (!elec) return;
+    const posName = elec.customPositions[idx];
+    const limits = elec.positionInfo[posName] || { max_votes: 1, max_candidates: 100, max_per_party: 1 };
+    
+    pendingPositionName = posName;
+    editingPositionName = posName;
+    
+    document.getElementById('position-config-name-display').textContent = `Edit configuration for ${escapeHtml(posName)}`;
+    document.getElementById('cfgNameGroup').classList.remove('d-none');
+    document.getElementById('cfgPosName').value = posName;
+    
+    document.getElementById('cfgMaxVotes').value = limits.max_votes;
+    document.getElementById('cfgMaxCand').value = limits.max_candidates;
+    document.getElementById('cfgMaxParty').value = limits.max_per_party;
+    
+    document.getElementById('position-config-modal-overlay').classList.remove('d-none');
+}
+
+function closePositionConfigModal() {
+    document.getElementById('position-config-modal-overlay').classList.add('d-none');
+    pendingPositionName = '';
+}
+
+async function submitPositionConfig() {
+    const oldName = editingPositionName;
+    let name = pendingPositionName;
+    
+    if (oldName) {
+        name = document.getElementById('cfgPosName').value.trim();
+    }
+    
+    if (!name) return;
+
+    const max_votes      = parseInt(document.getElementById('cfgMaxVotes').value) || 1;
+    const max_candidates = parseInt(document.getElementById('cfgMaxCand').value) || 100;
+    const max_per_party  = parseInt(document.getElementById('cfgMaxParty').value) || max_votes;
+
+    const elecId = document.getElementById('cand-election-filter').value;
+    const btn = document.querySelector('#position-config-modal-overlay .btn-primary-cta');
     if (btn) { btn.disabled = true; btn.innerHTML = '<i class="bi bi-arrow-repeat spin me-1"></i>...'; }
 
     try {
+        const payload = oldName ? 
+            { action: 'edit_position', election_id: elecId, old_title: oldName, title: name, max_votes, max_candidates, max_per_party } :
+            { action: 'add_position', election_id: elecId, title: name, max_votes, max_candidates, max_per_party };
+            
         const res = await fetch('admin_api.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'add_position', election_id: elecId, title: name })
+            body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (data.success) {
             await loadElectionsFromDB();
             const updatedElec = getElection(elecId);
-            input.value = '';
+            document.getElementById('newPositionName').value = '';
             document.getElementById('add-position-form').classList.add('d-none');
+            closePositionConfigModal();
             renderPositionManager(updatedElec);
             renderPositionDropdowns(updatedElec);
-            showToast(`Position "${name}" added!`,'success');
+            if (oldName) {
+                renderCandidatesTab();
+            }
+            showToast(`Position "${name}" ${oldName ? 'updated' : 'added'}!`,'success');
         } else {
             showToast(data.error || 'Error adding position.', 'error');
         }
     } catch (err) {
         showToast('Network error.', 'error');
     } finally {
-        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-plus-lg me-1"></i>Add'; }
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-plus-lg me-1"></i>Save & Add'; }
     }
 }
 
@@ -1393,6 +1483,7 @@ async function deletePosition(elecId, idx) {
             const updatedElec = getElection(elecId);
             renderPositionManager(updatedElec);
             renderPositionDropdowns(updatedElec);
+            renderCandidatesTab();
             showToast(`Position "${pos}" removed.`,'info');
         } else {
             showToast(data.error || 'Error removing position.', 'error');
@@ -2037,6 +2128,20 @@ async function saveAdminPassword() {
 //  INIT
 // ══════════════════════════════════════════════════════
 window.addEventListener('DOMContentLoaded', async () => {
+    // 1. Immediately apply the correct tab state to prevent visual flickering
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('role') === 'admin') {
+        setRole('admin');
+    }
+
+    // Immediately apply the correct auth form state based on the URL hash
+    if (window.location.hash === '#register') {
+        toggleAuthForms('register-section');
+    } else if (window.location.hash === '#forgot') {
+        toggleAuthForms('forgot-section');
+    }
+
+    // 2. Load database content
     await loadElectionsFromDB();
 
     // Populate the tracker election filter if it exists
@@ -2046,7 +2151,7 @@ window.addEventListener('DOMContentLoaded', async () => {
             + elections.map(e => `<option value="${e.id}">${escapeHtml(e.name)}</option>`).join('');
     }
 
-    // Handle PHP redirect params first; if not a redirect, show auth page
+    // 3. Handle PHP redirect params (toasts, errors); if not a redirect, show auth page
     const handled = handleUrlParams();
     if (!handled) showAuthPage();
 });
@@ -2068,8 +2173,12 @@ document.addEventListener('change', function(event) {
         const groupCheckboxes = document.querySelectorAll(`input[type="checkbox"][data-position="${position}"]`);
 
         let totalChecked = 0;
-        // If totalChecked >= data-limit, instantly find all other UNCHECKED checkboxes belonging to that same political position and set their disabled state to true.
-        // If totalChecked drops below the limit, immediately re-enable all checkboxes in that position group (disabled = false).
+        // 2. Count the total active selections within that checkbox position group
+        groupCheckboxes.forEach(cb => {
+            if (cb.checked) totalChecked++;
+        });
+
+        // 3. If totalChecked >= data-limit, immediately find all other UNCHECKED checkboxes and force their disabled property to true.
         const limitReached = (totalChecked >= limit);
         groupCheckboxes.forEach(cb => {
             if (!cb.checked) cb.disabled = limitReached;

@@ -21,7 +21,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 $recovery_email = strtolower(trim($_POST['recovery_email'] ?? ''));
 
 if (!filter_var($recovery_email, FILTER_VALIDATE_EMAIL)) {
-    header('Location: index.html?error=invalid_reset_email');
+    header('Location: index.html?error=invalid_reset_email#forgot');
     exit();
 }
 
@@ -33,9 +33,7 @@ $row = $stmt->get_result()->fetch_assoc();
 $stmt->close();
 
 if (!$row) {
-    // Do NOT reveal whether the email exists — security best practice
-    // Show the same "check your inbox" message either way
-    header('Location: index.html?reset=sent');
+    header('Location: index.html?error=not_found_email#forgot');
     exit();
 }
 
@@ -69,7 +67,7 @@ $ok = $stmt->execute();
 $stmt->close();
 
 if (!$ok) {
-    header('Location: index.html?error=reset_db_error');
+    header('Location: index.html?error=reset_failed#forgot');
     exit();
 }
 
@@ -93,7 +91,7 @@ if (!$ok) {
 // ── Option B: PHPMailer via Gmail SMTP
 if (!file_exists('vendor/autoload.php')) {
     error_log("PHPMailer is not installed. Please run 'composer require phpmailer/phpmailer'");
-    header('Location: index.html?error=phpmailer_missing');
+    header('Location: index.html?error=phpmailer_missing#forgot');
     exit();
 }
 require 'vendor/autoload.php';
@@ -103,13 +101,22 @@ use PHPMailer\PHPMailer\Exception;
 
 $mail = new PHPMailer(true);
 try {
+    // Bypass local XAMPP SSL certificate checks (useful for local development)
+    $mail->SMTPOptions = array(
+        'ssl' => array(
+            'verify_peer' => false,
+            'verify_peer_name' => false,
+            'allow_self_signed' => true
+        )
+    );
+
     $mail->isSMTP();
-    $mail->Host       = MAIL_HOST;
+    $mail->Host       = MAIL_HOST; // Should be smtp.gmail.com
     $mail->SMTPAuth   = true;
     $mail->Username   = MAIL_USERNAME;
     $mail->Password   = MAIL_PASSWORD;
-    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-    $mail->Port       = MAIL_PORT;
+    $mail->SMTPSecure = (MAIL_PORT == 465) ? PHPMailer::ENCRYPTION_SMTPS : PHPMailer::ENCRYPTION_STARTTLS;
+    $mail->Port       = MAIL_PORT; 
 
     $mail->setFrom(MAIL_FROM_EMAIL, MAIL_FROM_NAME);
     $mail->addAddress($recovery_email, $user_name);
@@ -117,7 +124,7 @@ try {
     $mail->Body    = "Hello {$user_name},\n\nYour reset code: {$otp}\n\nExpires in 15 minutes.";
     $mail->send();
 } catch (Exception $e) {
-    // Log but don't expose — show success page anyway (security)
+    // Log but don't expose system errors to users
     error_log("PHPMailer error: " . $mail->ErrorInfo);
 }
 

@@ -11,22 +11,22 @@ if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
     exit;
 }
 
+
 // ── DYNAMIC ADMINISTRATIVE CONFIGURATOR POLICY ───────────
-if (isset($_POST['position_name']) && isset($_POST['max_selection']) && isset($_POST['max_per_party'])) {
+if (isset($_POST['position_name']) && isset($_POST['max_selection']) && isset($_POST['max_total_candidates']) && isset($_POST['max_per_party'])) {
     try {
-        $pdo = new PDO("mysql:host=localhost;dbname=voting_system;charset=utf8mb4", "root", "");
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        
         $pdo->exec("CREATE TABLE IF NOT EXISTS position_rules (
             position_name VARCHAR(100) PRIMARY KEY,
             max_selection INT DEFAULT 1,
+            max_total_candidates INT DEFAULT 100,
             max_per_party INT DEFAULT 1
         )");
 
-        $stmt = $pdo->prepare("INSERT INTO position_rules (position_name, max_selection, max_per_party) VALUES (:name, :max_sel, :max_party) ON DUPLICATE KEY UPDATE max_selection = :max_sel, max_per_party = :max_party");
+        $stmt = $pdo->prepare("INSERT INTO position_rules (position_name, max_selection, max_total_candidates, max_per_party) VALUES (:name, :max_sel, :max_total, :max_party) ON DUPLICATE KEY UPDATE max_selection = :max_sel, max_total_candidates = :max_total, max_per_party = :max_party");
         $stmt->execute([
             ':name'      => $_POST['position_name'],
             ':max_sel'   => $_POST['max_selection'],
+            ':max_total' => $_POST['max_total_candidates'],
             ':max_party' => $_POST['max_per_party']
         ]);
         
@@ -127,6 +127,39 @@ try {
         $party_id = $data['party_id'];
         $pos = $data['position'];
         $name = $data['name'];
+
+        // 1. Extract and sanitize incoming position and party_name
+        $target_pos = isset($_POST['position']) ? htmlspecialchars(trim($_POST['position'])) : ($data['position'] ?? '');
+        $party_name = isset($_POST['party_name']) ? htmlspecialchars(trim($_POST['party_name'])) : ($data['party_name'] ?? '');
+
+        // Enforce strict relational business logic validation via PDO
+        
+        // 2. Retrieve limits from election_position table for this specific election
+        $ruleStmt = $pdo->prepare("SELECT max_candidates as max_total_candidates, max_per_party FROM election_position WHERE election_id = :elec_id AND title = :pos");
+        $ruleStmt->execute([':elec_id' => $elec_id, ':pos' => $target_pos]);
+        $rule = $ruleStmt->fetch(PDO::FETCH_ASSOC);
+        $max_total_candidates = $rule ? (int)$rule['max_total_candidates'] : 100;
+        $max_per_party = $rule ? (int)$rule['max_per_party'] : 100;
+        
+        // 3. Global Cap: Count all existing candidates for that position IN THIS ELECTION
+        $globalCountStmt = $pdo->prepare("SELECT COUNT(*) FROM candidate WHERE election_id = :elec_id AND position_title = :pos");
+        $globalCountStmt->execute([':elec_id' => $elec_id, ':pos' => $target_pos]);
+        $global_count = (int)$globalCountStmt->fetchColumn();
+
+        if ($global_count >= $max_total_candidates) {
+            echo json_encode(["success" => false, "error" => "Registration Blocked: The global candidate limit for this position ($max_total_candidates) has been reached."]);
+            exit;
+        }
+
+        // 4. Party Cap: Count how many candidates are currently registered for that exact position under the target party IN THIS ELECTION
+        $partyCountStmt = $pdo->prepare("SELECT COUNT(*) FROM candidate c LEFT JOIN partylist p ON c.party_id = p.id WHERE c.election_id = :elec_id AND c.position_title = :pos AND (p.name = :party_name OR c.party_id = :party_name_fallback)");
+        $partyCountStmt->execute([':elec_id' => $elec_id, ':pos' => $target_pos, ':party_name' => $party_name, ':party_name_fallback' => $party_id]);
+        $party_count = (int)$partyCountStmt->fetchColumn();
+        
+        if ($party_count >= $max_per_party) {
+            echo json_encode(["success" => false, "error" => "Registration Blocked: The target party lineup is already full ($max_per_party) for this specific position."]);
+            exit;
+        }
 
         // The system previously prevented adding multiple candidates to the same position within the same party.
         // This check has been removed to allow multiple candidates per position (e.g., multiple Senators in one partylist).
@@ -234,7 +267,12 @@ try {
         $stmtDelC->bind_param('s', $elec_id);
         $stmtDelC->execute();
         
-        // 3. Finally, delete the election itself
+        // 3. Delete positions linked to this election
+        $stmtDelP = $conn->prepare("DELETE FROM election_position WHERE election_id = ?");
+        $stmtDelP->bind_param('s', $elec_id);
+        $stmtDelP->execute();
+        
+        // 4. Finally, delete the election itself
         $stmtDelE = $conn->prepare("DELETE FROM election WHERE id = ?");
         $stmtDelE->bind_param('s', $elec_id);
         $stmtDelE->execute();
@@ -287,12 +325,16 @@ try {
         $elec_id = $data['election_id'];
         $title = $data['title'];
         $max_votes = isset($data['max_votes']) ? (int)$data['max_votes'] : 1;
+        $max_candidates = isset($data['max_candidates']) ? (int)$data['max_candidates'] : 100;
+        $max_per_party = isset($data['max_per_party']) ? (int)$data['max_per_party'] : 1;
         
-        $conn->query("CREATE TABLE IF NOT EXISTS election_position (id INT AUTO_INCREMENT PRIMARY KEY, election_id VARCHAR(50), title VARCHAR(100), max_votes INT DEFAULT 1)");
-        $checkMax = $conn->query("SHOW COLUMNS FROM election_position LIKE 'max_votes'");
-        if ($checkMax && $checkMax->num_rows == 0) {
-            $conn->query("ALTER TABLE election_position ADD COLUMN max_votes INT DEFAULT 1");
-        }
+        $conn->query("CREATE TABLE IF NOT EXISTS election_position (id INT AUTO_INCREMENT PRIMARY KEY, election_id VARCHAR(50), title VARCHAR(100), max_votes INT DEFAULT 1, max_candidates INT DEFAULT 100, max_per_party INT DEFAULT 1)");
+        $checkMax1 = $conn->query("SHOW COLUMNS FROM election_position LIKE 'max_votes'");
+        if ($checkMax1 && $checkMax1->num_rows == 0) $conn->query("ALTER TABLE election_position ADD COLUMN max_votes INT DEFAULT 1");
+        $checkMax2 = $conn->query("SHOW COLUMNS FROM election_position LIKE 'max_candidates'");
+        if ($checkMax2 && $checkMax2->num_rows == 0) $conn->query("ALTER TABLE election_position ADD COLUMN max_candidates INT DEFAULT 100");
+        $checkMax3 = $conn->query("SHOW COLUMNS FROM election_position LIKE 'max_per_party'");
+        if ($checkMax3 && $checkMax3->num_rows == 0) $conn->query("ALTER TABLE election_position ADD COLUMN max_per_party INT DEFAULT 1");
         
         // Prevent duplicate positions in the same election
         $check = $conn->prepare("SELECT id FROM election_position WHERE election_id = ? AND LOWER(title) = LOWER(?)");
@@ -304,11 +346,11 @@ try {
         }
         $check->close();
         
-        $stmt = $conn->prepare("INSERT INTO election_position (election_id, title, max_votes) VALUES (?, ?, ?)");
-        $stmt->bind_param('ssi', $elec_id, $title, $max_votes);
+        $stmt = $conn->prepare("INSERT INTO election_position (election_id, title, max_votes, max_candidates, max_per_party) VALUES (?, ?, ?, ?, ?)");
+        $stmt->bind_param('ssiii', $elec_id, $title, $max_votes, $max_candidates, $max_per_party);
         $stmt->execute();
         
-        log_audit($conn, 'ADD_POSITION', "Added position $title to election $elec_id (Max votes: $max_votes)");
+        log_audit($conn, 'ADD_POSITION', "Added position $title to election $elec_id (Max votes: $max_votes, Max cand: $max_candidates, Max per party: $max_per_party)");
         echo json_encode(['success' => true]);
     }
     // ── 12. Delete Custom Position ─────────────────────────────
@@ -342,6 +384,44 @@ try {
         $stmt->execute();
         
         log_audit($conn, 'DELETE_POSITION', "Deleted position $title from election $elec_id");
+        echo json_encode(['success' => true]);
+    }
+    // ── 12.5. Edit Custom Position ─────────────────────────────
+    elseif ($action === 'edit_position') {
+        $elec_id = $data['election_id'];
+        $old_title = $data['old_title'];
+        $new_title = $data['title'];
+        $max_votes = isset($data['max_votes']) ? (int)$data['max_votes'] : 1;
+        $max_candidates = isset($data['max_candidates']) ? (int)$data['max_candidates'] : 100;
+        $max_per_party = isset($data['max_per_party']) ? (int)$data['max_per_party'] : 1;
+        
+        // If title changed, verify duplicate and cascade renames
+        if (strtolower($old_title) !== strtolower($new_title)) {
+            $check = $conn->prepare("SELECT id FROM election_position WHERE election_id = ? AND LOWER(title) = LOWER(?)");
+            $check->bind_param('ss', $elec_id, $new_title);
+            $check->execute();
+            if ($check->get_result()->num_rows > 0) {
+                echo json_encode(['success' => false, 'error' => 'This position name already exists.']);
+                exit;
+            }
+            $check->close();
+            
+            $stmtC = $conn->prepare("UPDATE candidate SET position_title = ? WHERE election_id = ? AND position_title = ?");
+            $stmtC->bind_param('sss', $new_title, $elec_id, $old_title);
+            $stmtC->execute();
+            
+            $old_abstain = 'ABSTAIN__' . $old_title;
+            $new_abstain = 'ABSTAIN__' . $new_title;
+            $stmtV = $conn->prepare("UPDATE vote SET candidate_id = ? WHERE election_id = ? AND candidate_id = ?");
+            $stmtV->bind_param('sss', $new_abstain, $elec_id, $old_abstain);
+            $stmtV->execute();
+        }
+
+        $stmt = $conn->prepare("UPDATE election_position SET title = ?, max_votes = ?, max_candidates = ?, max_per_party = ? WHERE election_id = ? AND title = ?");
+        $stmt->bind_param('siiiss', $new_title, $max_votes, $max_candidates, $max_per_party, $elec_id, $old_title);
+        $stmt->execute();
+        
+        log_audit($conn, 'EDIT_POSITION', "Edited position in election $elec_id from $old_title to $new_title (Max votes: $max_votes, Max cand: $max_candidates, Max per party: $max_per_party)");
         echo json_encode(['success' => true]);
     }
 } catch (Exception $e) {

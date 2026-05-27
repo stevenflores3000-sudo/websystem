@@ -8,6 +8,8 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=Libre+Baskerville:wght@400;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
+    <!-- DataTables CSS -->
+    <link rel="stylesheet" href="https://cdn.datatables.net/2.0.7/css/dataTables.dataTables.min.css">
 </head>
 <body>
 
@@ -104,6 +106,17 @@
                     <a href="#" class="link-subtle" onclick="showForgot(); return false;">Forgot Password?</a>
                     <a href="#" class="link-accent" onclick="showRegister(); return false;">Create Account</a>
                 </div>
+
+                <!-- Prevent Admin Tab Flicker -->
+                <script>
+                    if (new URLSearchParams(window.location.search).get('role') === 'admin') {
+                        document.getElementById('voter-tab').classList.remove('active');
+                        document.getElementById('admin-tab').classList.add('active');
+                        document.getElementById('role-slider').classList.add('admin-mode');
+                        document.getElementById('voter-login-form').classList.add('d-none');
+                        document.getElementById('admin-login-form').classList.remove('d-none');
+                    }
+                </script>
             </div>
 
             <!-- REGISTER -->
@@ -288,7 +301,10 @@
             <div id="forgot-section" class="auth-form-card d-none">
                 <h2 class="form-card-title">Reset Password</h2>
                 <p class="form-card-sub">Recover your account access</p>
-                <div class="info-banner mb-4"><i class="bi bi-info-circle-fill me-2"></i>Enter the <strong>personal Gmail</strong> you registered with and we'll send a 6-digit verification code.</div>
+                <div class="info-banner mb-4" style="display: flex; align-items: flex-start; text-align: left; padding: 12px; background: rgba(10, 88, 202, 0.08); border-radius: 8px; font-size: 0.85rem; color: var(--text-mid); border: 1px solid rgba(10, 88, 202, 0.15);">
+                    <i class="bi bi-info-circle-fill me-2" style="color: var(--nu-blue); margin-top: 2px;"></i>
+                    <div>Enter the <strong>personal Gmail</strong> you registered with and we'll send a 6-digit verification code.</div>
+                </div>
                 <div class="field-group mb-4">
                     <label class="field-label"><i class="bi bi-google me-1"></i>Personal Gmail Address</label>
                     <div class="input-wrap">
@@ -443,6 +459,9 @@
                 
                 <div id="receipt-content" style="text-align:left;">
                     <!-- Filled via JS -->
+                </div>
+                <div class="mt-4 text-center">
+                    <a id="print-receipt-btn" href="#" target="_blank" class="btn-primary-cta d-none" style="display:inline-flex; width:auto; padding:0.5rem 1.5rem; text-decoration:none;"><i class="bi bi-printer-fill me-2"></i>Print Official Document</a>
                 </div>
             </div>
         </div>
@@ -615,12 +634,7 @@
 
                 <!-- Filter / search row -->
                 <div class="tracker-controls">
-                    <div class="input-wrap" style="max-width:280px;">
-                        <i class="bi bi-search input-icon"></i>
-                        <input type="text" id="tracker-search" class="field-input"
-                               placeholder="Search name or ID…"
-                               oninput="fetchVoterData()">
-                    </div>
+                    <!-- Custom search removed: DataTables.js will automatically generate its own native search bar -->
                     <select id="tracker-status-filter" class="field-input field-select tracker-filter-select" onchange="fetchVoterData()">
                         <option value="all">All Voters</option>
                         <option value="voted">Voted</option>
@@ -797,6 +811,41 @@
     </div>
 </div>
 
+<!-- Configure Position Limits Modal -->
+<div id="position-config-modal-overlay" class="modal-overlay d-none" onclick="closePositionConfigModal()">
+    <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header-row">
+            <h3 class="modal-title"><i class="bi bi-gear-fill me-2"></i>Configure Position</h3>
+            <button class="modal-close" onclick="closePositionConfigModal()"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <div class="field-group mb-3 d-none" id="cfgNameGroup">
+            <label class="field-label">Position Name</label>
+            <div class="input-wrap"><i class="bi bi-briefcase input-icon"></i><input type="text" id="cfgPosName" class="field-input"></div>
+        </div>
+        <p class="form-card-sub mb-3" id="position-config-name-display" style="color:var(--text-mid); font-size:0.9rem;">Set candidate limits for the position.</p>
+        
+        <div class="field-group mb-3">
+            <label class="field-label">How many candidates can a voter select?</label>
+            <div class="input-wrap"><i class="bi bi-check2-square input-icon"></i><input type="number" id="cfgMaxVotes" class="field-input" placeholder="e.g. 1 for President, 12 for Senators" value="1" min="1"></div>
+        </div>
+        
+        <div class="field-group mb-3">
+            <label class="field-label">TOTAL max candidates allowed (Global Cap)</label>
+            <div class="input-wrap"><i class="bi bi-people-fill input-icon"></i><input type="number" id="cfgMaxCand" class="field-input" placeholder="e.g. 10" value="10" min="1"></div>
+        </div>
+        
+        <div class="field-group mb-4">
+            <label class="field-label">Max candidates allowed per partylist (Party Cap)</label>
+            <div class="input-wrap"><i class="bi bi-person-badge input-icon"></i><input type="number" id="cfgMaxParty" class="field-input" placeholder="e.g. 1" value="1" min="1"></div>
+        </div>
+        
+        <div class="d-flex gap-2">
+            <button class="btn-primary-cta flex-fill" onclick="submitPositionConfig()"><i class="bi bi-plus-lg me-1"></i>Save & Add</button>
+            <button class="btn-ghost flex-fill" onclick="closePositionConfigModal()">Cancel</button>
+        </div>
+    </div>
+</div>
+
 <!-- Toast -->
 <div id="toast-box" class="toast-box">
     <div id="toast-icon" class="toast-icon"></div>
@@ -805,6 +854,10 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<!-- jQuery (Required for DataTables) -->
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<!-- DataTables JS -->
+<script src="https://cdn.datatables.net/2.0.7/js/dataTables.min.js"></script>
 <script src="script.js?v=2.1"></script>
 
 <!-- Browser History (Back/Forward) Support -->

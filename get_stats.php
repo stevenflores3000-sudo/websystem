@@ -68,7 +68,7 @@ if ($section === 'all' || $section === 'summary') {
 
     // Election status breakdown
     $r = $conn->query("SELECT status, COUNT(*) AS cnt FROM election GROUP BY status");
-    $status_counts = ['active' => 0, 'upcoming' => 0, 'closed' => 0];
+    $status_counts = ['active' => 0, 'upcoming' => 0, 'closed' => 0, 'archived' => 0];
     if ($r) {
         while ($row = $r->fetch_assoc()) {
             $s = strtolower($row['status']);
@@ -87,7 +87,7 @@ if ($section === 'all' || $section === 'summary') {
         'turnout_pct'            => $turnout_pct,
         'active_elections'       => $status_counts['active'],
         'upcoming_elections'     => $status_counts['upcoming'],
-        'closed_elections'       => $status_counts['closed'],
+        'closed_elections'       => $status_counts['closed'] + $status_counts['archived'],
     ];
 }
 
@@ -97,6 +97,21 @@ if ($section === 'all' || $section === 'summary') {
 //  If election_id is provided, has_voted is scoped to that election.
 // ══════════════════════════════════════════════════════════════════════
 if ($section === 'all' || $section === 'voter_tracker') {
+    
+    // Dynamically patch user table if columns are missing to prevent query crashes
+    try {
+        $checkDept = $conn->query("SHOW COLUMNS FROM user LIKE 'department'");
+        if ($checkDept && $checkDept->num_rows == 0) {
+            $conn->query("ALTER TABLE user ADD COLUMN department VARCHAR(100) DEFAULT ''");
+        }
+        $checkYear = $conn->query("SHOW COLUMNS FROM user LIKE 'year_level'");
+        if ($checkYear && $checkYear->num_rows == 0) {
+            $conn->query("ALTER TABLE user ADD COLUMN year_level VARCHAR(50) DEFAULT ''");
+        }
+    } catch(Exception $ex) {
+        // Ignore patch errors
+    }
+
     if ($election_id) {
         $stmt = $conn->prepare(
             "SELECT u.id, u.student_id, u.name, u.department, u.year_level,
@@ -189,6 +204,14 @@ if ($section === 'all' || $section === 'tally') {
     if ($checkMax && $checkMax->num_rows == 0) {
         $conn->query("ALTER TABLE election_position ADD COLUMN max_votes INT DEFAULT 1");
     }
+    $checkMax2 = $conn->query("SHOW COLUMNS FROM election_position LIKE 'max_candidates'");
+    if ($checkMax2 && $checkMax2->num_rows == 0) {
+        $conn->query("ALTER TABLE election_position ADD COLUMN max_candidates INT DEFAULT 100");
+    }
+    $checkMax3 = $conn->query("SHOW COLUMNS FROM election_position LIKE 'max_per_party'");
+    if ($checkMax3 && $checkMax3->num_rows == 0) {
+        $conn->query("ALTER TABLE election_position ADD COLUMN max_per_party INT DEFAULT 1");
+    }
 
     $elections_out = [];
 
@@ -255,7 +278,7 @@ if ($section === 'all' || $section === 'tally') {
         $positions = [];
         
         // Pre-fill empty positions directly from the dedicated database table
-        $stmtP = $conn->prepare("SELECT title, max_votes FROM election_position WHERE election_id = ? ORDER BY CASE WHEN title = 'President' THEN 0 ELSE 1 END, id ASC");
+        $stmtP = $conn->prepare("SELECT title, max_votes, max_candidates, max_per_party FROM election_position WHERE election_id = ? ORDER BY CASE WHEN title = 'President' THEN 0 ELSE 1 END, id ASC");
         if (!$stmtP) {
             $out['success'] = false;
             $out['error']   = 'DB Prepare Error (Position): ' . $conn->error;
@@ -267,7 +290,11 @@ if ($section === 'all' || $section === 'tally') {
         $position_info = [];
         while($pRow = $resP->fetch_assoc()) {
             $positions[$pRow['title']] = [];
-            $position_info[$pRow['title']] = isset($pRow['max_votes']) ? (int)$pRow['max_votes'] : 1;
+            $position_info[$pRow['title']] = [
+                'max_votes'      => isset($pRow['max_votes']) ? (int)$pRow['max_votes'] : 1,
+                'max_candidates' => isset($pRow['max_candidates']) ? (int)$pRow['max_candidates'] : 100,
+                'max_per_party'  => isset($pRow['max_per_party']) ? (int)$pRow['max_per_party'] : 1
+            ];
         }
         $stmtP->close();
 
@@ -335,6 +362,7 @@ if ($section === 'receipt') {
         $user_id = $_SESSION['user_id'];
         $stmt = $conn->prepare(
             "SELECT 
+                v.transaction_id,
                 COALESCE(c.position_title, REPLACE(v.candidate_id, 'ABSTAIN__', '')) AS position_title, 
                 COALESCE(NULLIF(c.name, ''), u.name, CASE WHEN v.candidate_id LIKE 'ABSTAIN__%' THEN 'Abstain' ELSE '' END) AS candidate_name, 
                 COALESCE(p.name, CASE WHEN v.candidate_id LIKE 'ABSTAIN__%' THEN '—' ELSE 'Independent' END) AS party_name,
@@ -356,8 +384,10 @@ if ($section === 'receipt') {
             $res = $stmt->get_result();
             
             $receipt = [];
+            $txn_id = null;
             if ($res) {
                 while ($row = $res->fetch_assoc()) {
+                    if (!$txn_id) $txn_id = $row['transaction_id'];
                     $receipt[] = [
                         'position'  => $row['position_title'],
                         'candidate' => $row['candidate_name'],
@@ -367,6 +397,7 @@ if ($section === 'receipt') {
             }
             $stmt->close();
             $out['receipt'] = $receipt;
+            $out['transaction_id'] = $txn_id;
         }
     }
 }

@@ -1,5 +1,6 @@
 <?php
 session_start();
+include 'db_connect.php';
 
 // 1. Validate user session parameters
 if (!isset($_SESSION['user_id'])) {
@@ -16,14 +17,12 @@ $transaction_id = $_GET['transaction_id'];
 
 try {
     // 3. Execute parameterized PDO query joining tables
-    $pdo = new PDO("mysql:host=localhost;dbname=voting_system;charset=utf8mb4", "root", "");
-    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
     $stmt = $pdo->prepare("
         SELECT v.transaction_id, v.created_at, u.name as client_identity, c.position_title as category_name, c.name as asset_title
         FROM vote v
         JOIN user u ON v.user_id = u.id
-        JOIN candidate c ON v.candidate_id = c.id
+        LEFT JOIN candidate c ON v.candidate_id = c.id
         WHERE v.transaction_id = :txn_id
     ");
     $stmt->execute([':txn_id' => $transaction_id]);

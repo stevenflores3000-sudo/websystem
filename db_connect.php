@@ -11,6 +11,10 @@ try {
     if ($conn->connect_error) {
         throw new Exception($conn->connect_error);
     }
+    
+    // Create a shared PDO instance for scripts that require it (submit_vote, admin_api, etc.)
+    $pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8mb4", $user, $pass);
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 } catch (Exception $e) {
     // If the script expects JSON (e.g. API endpoints), output JSON
     $is_api = false;
