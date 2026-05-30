@@ -1032,12 +1032,50 @@ async function fetchVoterData() {
         const total   = tracker.length;
         const pct     = total > 0 ? Math.round((voted / total) * 100) : 0;
 
+        // Map the Academic Program to the Parent College
+        const getCollege = (prog) => {
+            const mapping = {
+                'BSArch': 'SECA', 'BSCE': 'SECA', 'BSCpE': 'SECA', 'BSCS-ML': 'SECA', 'BSIT-MWA': 'SECA',
+                'BSA': 'SBMA', 'BSBA-FM': 'SBMA', 'BSBA-HRM': 'SBMA', 'BSBA-MM': 'SBMA', 'BSHM': 'SBMA', 'BSMA': 'SBMA',
+                'ABComm': 'SASE', 'BPEd': 'SASE', 'BSPSY': 'SASE'
+            };
+            return mapping[prog] || '—';
+        };
+
+        // Calculate real-time breakdowns
+        let colStats = { 'SECA': {v:0, t:0}, 'SBMA': {v:0, t:0}, 'SASE': {v:0, t:0} };
+        let yrStats = { '1': {v:0, t:0}, '2': {v:0, t:0}, '3': {v:0, t:0}, '4': {v:0, t:0} };
+
+        tracker.forEach(v => {
+            const col = getCollege(v.department);
+            if (colStats[col]) { colStats[col].t++; if (v.has_voted) colStats[col].v++; }
+            if (yrStats[v.year_level]) { yrStats[v.year_level].t++; if (v.has_voted) yrStats[v.year_level].v++; }
+        });
+
         if (summary) {
             summary.innerHTML = `
-                <span class="tracker-stat"><i class="bi bi-people-fill me-1" style="color:var(--nu-blue);"></i>${total} registered</span>
-                <span class="tracker-stat voted"><i class="bi bi-check-circle-fill me-1"></i>${voted} voted</span>
-                <span class="tracker-stat not-voted"><i class="bi bi-x-circle-fill me-1"></i>${total - voted} not voted</span>
-                <span class="tracker-stat pct"><i class="bi bi-graph-up me-1"></i>${pct}% turnout</span>`;
+                <div style="display:flex; flex-direction:column; gap:12px; width:100%;">
+                    <div style="display:flex; gap:10px;">
+                        <span class="tracker-stat"><i class="bi bi-people-fill me-1" style="color:var(--nu-blue);"></i>${voted} out of ${total} voted</span>
+                        <span class="tracker-stat pct"><i class="bi bi-graph-up me-1"></i>${pct}% turnout</span>
+                        <span class="tracker-stat not-voted"><i class="bi bi-x-circle-fill me-1"></i>${total - voted} not voted</span>
+                    </div>
+                    <div style="display:flex; flex-wrap:wrap; gap:15px; font-size:0.85rem; color:var(--text-dark); background: rgba(0,0,0,0.03); padding: 10px; border-radius: 8px;">
+                        <div style="display:flex; gap:12px; border-right: 1px solid var(--border-light); padding-right: 15px;">
+                            <strong style="color:var(--nu-blue);"><i class="bi bi-building me-1"></i>By Department:</strong>
+                            <span>SECA: <strong>${colStats['SECA'].v}/${colStats['SECA'].t}</strong></span>
+                            <span>SBMA: <strong>${colStats['SBMA'].v}/${colStats['SBMA'].t}</strong></span>
+                            <span>SASE: <strong>${colStats['SASE'].v}/${colStats['SASE'].t}</strong></span>
+                        </div>
+                        <div style="display:flex; gap:12px;">
+                            <strong style="color:var(--nu-blue);"><i class="bi bi-calendar3 me-1"></i>By Year Level:</strong>
+                            <span>1st: <strong>${yrStats['1'].v}/${yrStats['1'].t}</strong></span>
+                            <span>2nd: <strong>${yrStats['2'].v}/${yrStats['2'].t}</strong></span>
+                            <span>3rd: <strong>${yrStats['3'].v}/${yrStats['3'].t}</strong></span>
+                            <span>4th: <strong>${yrStats['4'].v}/${yrStats['4'].t}</strong></span>
+                        </div>
+                    </div>
+                </div>`;
         }
 
         if (tracker.length === 0) {
@@ -1047,12 +1085,18 @@ async function fetchVoterData() {
 
         // We let DataTables handle the text search, so we only apply the dropdown filter here
         const filter = document.getElementById('tracker-status-filter')?.value || 'all';
+        const deptFilter = document.getElementById('tracker-dept-filter')?.value || 'all';
+        const progFilter = document.getElementById('tracker-prog-filter')?.value || 'all';
+        const yearFilter = document.getElementById('tracker-year-filter')?.value || 'all';
 
         const filtered = tracker.filter(v => {
             const matchFilter = filter === 'all'
                 || (filter === 'voted' && v.has_voted)
                 || (filter === 'not_voted' && !v.has_voted);
-            return matchFilter;
+            const matchDept = deptFilter === 'all' || getCollege(v.department) === deptFilter;
+            const matchProg = progFilter === 'all' || v.department === progFilter;
+            const matchYear = yearFilter === 'all' || String(v.year_level) === yearFilter;
+            return matchFilter && matchDept && matchProg && matchYear;
         });
 
         if (filtered.length === 0) {
@@ -1073,6 +1117,7 @@ async function fetchVoterData() {
                         <th>Student Name</th>
                         <th>Student ID</th>
                         <th>Department</th>
+                        <th>Program</th>
                         <th>Year</th>
                         <th>Status</th>
                     </tr>
@@ -1083,6 +1128,7 @@ async function fetchVoterData() {
                         <td class="tracker-num">${i + 1}</td>
                         <td class="tracker-name">${escapeHtml(v.name)}</td>
                         <td class="tracker-sid">${escapeHtml(v.student_id)}</td>
+                        <td class="tracker-dept">${escapeHtml(getCollege(v.department))}</td>
                         <td class="tracker-dept">${escapeHtml(v.department || '—')}</td>
                         <td class="tracker-year">${v.year_level ? escapeHtml(v.year_level) + (v.year_level==='1'?'st':v.year_level==='2'?'nd':v.year_level==='3'?'rd':'th') + ' Yr' : '—'}</td>
                         <td>
@@ -2052,9 +2098,10 @@ function renderArchive() {
             <div class="archive-icon"><i class="bi bi-archive-fill"></i></div>
             <div>
                 <div class="archive-name">${escapeHtml(e.name)}</div>
-                <div class="archive-dates">Start: <strong>${formatDate(e.startDate)}</strong> · End: <strong>${formatDate(e.endDate)}</strong> · ${vCast} votes · ${turnout}% turnout</div>
+                <div class="archive-dates">Start: <strong>${formatDate(e.startDate)}</strong> · End: <strong>${formatDate(e.endDate)}</strong> · ${vCast} out of ${e.eligibleVoters} voted · ${turnout}% turnout</div>
             </div>
             <div class="archive-actions">
+                ${e.status === 'archived' ? `<button class="btn-outline-sm" onclick="unarchiveElection('${e.id}')" title="Restore to Elections list"><i class="bi bi-arrow-counterclockwise me-1"></i>Restore</button>` : ''}
                 <button class="btn-outline-sm" onclick="viewArchivedResults('${e.id}')"><i class="bi bi-bar-chart me-1"></i>View Results</button>
                 <button class="btn-icon-danger" onclick="permanentlyDeleteElection('${e.id}')" title="Delete permanently"><i class="bi bi-trash-fill"></i></button>
             </div>
@@ -2069,6 +2116,34 @@ function viewArchivedResults(elecId) {
         document.getElementById('results-election-filter').value = elecId;
         renderResults();
     }, 50);
+}
+
+async function unarchiveElection(elecId) {
+    const elec = getElection(elecId);
+    if (!elec) return;
+    if (!confirm(`Restore "${elec.name}"? It will be moved back to the main Elections tab as "Closed".`)) return;
+    
+    try {
+        const res = await fetch('admin_api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'change_status', election_id: elecId, status: 'closed' })
+        });
+        const data = await res.json();
+        if (data.success) {
+            elec.archived = false;
+            elec.status   = 'closed';
+            renderArchive();
+            renderElectionsList();
+            renderOverview();
+            showToast(`"${elec.name}" restored successfully.`,'success');
+            updateAuthBadge();
+        } else {
+            showToast('Error restoring election.', 'error');
+        }
+    } catch (err) {
+        showToast('Network error.', 'error');
+    }
 }
 
 async function permanentlyDeleteElection(elecId) {

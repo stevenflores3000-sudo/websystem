@@ -131,7 +131,7 @@
                     JS registerUser() still validates client-side before PHP sends to MySQL
                 -->
                 <form id="register-form" action="register.php" method="POST"
-                      onsubmit="return validateRegister(event)">
+                      onsubmit="showRegisterConfirmModal(event); return false;">
 
                     <div class="field-group mb-3">
                         <label class="field-label">Student ID</label>
@@ -642,6 +642,42 @@
                         <option value="not_voted">Not Yet Voted</option>
                     </select>
                     <select id="tracker-election-filter" class="field-input field-select tracker-filter-select" onchange="fetchVoterData()">
+                    </select>
+                    <select id="tracker-dept-filter" class="field-input field-select tracker-filter-select" onchange="fetchVoterData()">
+                        <option value="all">All Departments</option>
+                        <option value="SECA">SECA</option>
+                        <option value="SBMA">SBMA</option>
+                        <option value="SASE">SASE</option>
+                    </select>
+                    <select id="tracker-prog-filter" class="field-input field-select tracker-filter-select" onchange="fetchVoterData()">
+                        <option value="all">All Programs</option>
+                        <optgroup label="SECA">
+                            <option value="BSArch">BSArch</option>
+                            <option value="BSCE">BSCE</option>
+                            <option value="BSCpE">BSCpE</option>
+                            <option value="BSCS-ML">BSCS-ML</option>
+                            <option value="BSIT-MWA">BSIT-MWA</option>
+                        </optgroup>
+                        <optgroup label="SBMA">
+                            <option value="BSA">BSA</option>
+                            <option value="BSBA-FM">BSBA-FM</option>
+                            <option value="BSBA-HRM">BSBA-HRM</option>
+                            <option value="BSBA-MM">BSBA-MM</option>
+                            <option value="BSHM">BSHM</option>
+                            <option value="BSMA">BSMA</option>
+                        </optgroup>
+                        <optgroup label="SASE">
+                            <option value="ABComm">ABComm</option>
+                            <option value="BPEd">BPEd</option>
+                            <option value="BSPSY">BSPSY</option>
+                        </optgroup>
+                    </select>
+                    <select id="tracker-year-filter" class="field-input field-select tracker-filter-select" onchange="fetchVoterData()">
+                        <option value="all">All Years</option>
+                        <option value="1">1st Year</option>
+                        <option value="2">2nd Year</option>
+                        <option value="3">3rd Year</option>
+                        <option value="4">4th Year</option>
                     </select>
                 </div>
 
