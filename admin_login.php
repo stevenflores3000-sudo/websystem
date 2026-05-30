@@ -23,6 +23,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $_SESSION['user_name'] = $admin['name'];
             $_SESSION['role']      = 'admin';
 
+            // Log the successful login action
+            $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+            $stmt_log = $conn->prepare("INSERT INTO audit_log (admin_id, action, details, ip_address) VALUES (?, 'ADMIN_LOGIN', 'Admin successfully logged in', ?)");
+            $stmt_log->bind_param('ss', $admin['admin_id'], $ip);
+            $stmt_log->execute();
+
             $stmt->close();
             header("Location: index.html?admin=success&role=admin&name=" . urlencode($admin['name']));
             exit();

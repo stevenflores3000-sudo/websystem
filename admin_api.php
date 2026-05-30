@@ -15,13 +15,6 @@ if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
 // ── DYNAMIC ADMINISTRATIVE CONFIGURATOR POLICY ───────────
 if (isset($_POST['position_name']) && isset($_POST['max_selection']) && isset($_POST['max_total_candidates']) && isset($_POST['max_per_party'])) {
     try {
-        $pdo->exec("CREATE TABLE IF NOT EXISTS position_rules (
-            position_name VARCHAR(100) PRIMARY KEY,
-            max_selection INT DEFAULT 1,
-            max_total_candidates INT DEFAULT 100,
-            max_per_party INT DEFAULT 1
-        )");
-
         $stmt = $pdo->prepare("INSERT INTO position_rules (position_name, max_selection, max_total_candidates, max_per_party) VALUES (:name, :max_sel, :max_total, :max_party) ON DUPLICATE KEY UPDATE max_selection = :max_sel, max_total_candidates = :max_total, max_per_party = :max_party");
         $stmt->execute([
             ':name'      => $_POST['position_name'],
@@ -38,18 +31,9 @@ if (isset($_POST['position_name']) && isset($_POST['max_selection']) && isset($_
     }
 }
 
-// Create audit_log table if it doesn't exist
-$conn->query("CREATE TABLE IF NOT EXISTS audit_log (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    admin_id VARCHAR(50),
-    action VARCHAR(50),
-    details TEXT,
-    ip_address VARCHAR(45),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-)");
-
 function log_audit($conn, $action, $details) {
-    $admin_id = $_SESSION['user_id'] ?? 'unknown';
+    // Use 'admin_id' (e.g. 'admin') instead of 'user_id' (e.g. '1') for better readability in the UI
+    $admin_id = $_SESSION['admin_id'] ?? 'unknown';
     $ip = $_SERVER['REMOTE_ADDR'] ?? '';
     $stmt = $conn->prepare("INSERT INTO audit_log (admin_id, action, details, ip_address) VALUES (?, ?, ?, ?)");
     $stmt->bind_param('ssss', $admin_id, $action, $details, $ip);
@@ -60,11 +44,26 @@ $data = json_decode(file_get_contents('php://input'), true);
 $action = $data['action'] ?? '';
 
 try {
+    // ── 0. Auto-Patch Missing Columns ──────────────────────────
+    // Ensures the database has the new date columns if they are missing
+    $checkCol = $conn->query("SHOW COLUMNS FROM election LIKE 'start_date'");
+    if ($checkCol && $checkCol->num_rows == 0) {
+        $conn->query("ALTER TABLE election ADD COLUMN start_date DATE NULL AFTER date_of_election");
+        $conn->query("ALTER TABLE election ADD COLUMN end_date DATE NULL AFTER start_date");
+        $conn->query("UPDATE election SET start_date = date_of_election, end_date = date_of_election");
+    }
+
+    $checkPartyCol = $conn->query("SHOW COLUMNS FROM partylist LIKE 'election_id'");
+    if ($checkPartyCol && $checkPartyCol->num_rows == 0) {
+        $conn->query("ALTER TABLE partylist ADD COLUMN election_id VARCHAR(50) NULL");
+    }
+
     // ── 1. Create a New Election ──────────────────────────────
     if ($action === 'add_election') {
         $id = 'ELEC-' . mt_rand(10000, 99999);
         $title = $data['name'];
         $date = $data['start_date'];
+        $end_date = $data['end_date'];
         $status = $data['status'];
 
         // Prevent duplicate election titles
@@ -77,8 +76,8 @@ try {
         }
         $checkStmt->close();
 
-        $stmt = $conn->prepare("INSERT INTO election (id, title, date_of_election, status) VALUES (?, ?, ?, ?)");
-        $stmt->bind_param('ssss', $id, $title, $date, $status);
+        $stmt = $conn->prepare("INSERT INTO election (id, title, date_of_election, start_date, end_date, status) VALUES (?, ?, ?, ?, ?, ?)");
+        $stmt->bind_param('ssssss', $id, $title, $date, $date, $end_date, $status);
         $stmt->execute();
         
         log_audit($conn, 'ADD_ELECTION', "Created election: $title (ID: $id)");
@@ -100,25 +99,23 @@ try {
     elseif ($action === 'add_party') {
         $id = 'PRTY-' . mt_rand(10000, 99999);
         $name = $data['name'];
+        $elec_id = $data['election_id'];
         
-        // Ensure table exists just in case
-        $conn->query("CREATE TABLE IF NOT EXISTS partylist (id VARCHAR(50) PRIMARY KEY, name VARCHAR(100))");
-        
-        // Prevent duplicate party names
-        $checkStmt = $conn->prepare("SELECT id FROM partylist WHERE LOWER(name) = LOWER(?)");
-        $checkStmt->bind_param('s', $name);
+        // Prevent duplicate party names within the SAME election
+        $checkStmt = $conn->prepare("SELECT id FROM partylist WHERE LOWER(name) = LOWER(?) AND election_id = ?");
+        $checkStmt->bind_param('ss', $name, $elec_id);
         $checkStmt->execute();
         if ($checkStmt->get_result()->num_rows > 0) {
-            echo json_encode(['success' => false, 'error' => 'A party list with this name already exists.']);
+            echo json_encode(['success' => false, 'error' => 'A party list with this name already exists in this election.']);
             exit;
         }
         $checkStmt->close();
 
-        $stmt = $conn->prepare("INSERT INTO partylist (id, name) VALUES (?, ?)");
-        $stmt->bind_param('ss', $id, $name);
+        $stmt = $conn->prepare("INSERT INTO partylist (id, name, election_id) VALUES (?, ?, ?)");
+        $stmt->bind_param('sss', $id, $name, $elec_id);
         $stmt->execute();
         
-        log_audit($conn, 'ADD_PARTY', "Created party list: $name (ID: $id)");
+        log_audit($conn, 'ADD_PARTY', "Created party list: $name (ID: $id) in election $elec_id");
         echo json_encode(['success' => true, 'party_id' => $id]);
     }
     // ── 4. Add a Candidate ────────────────────────────────────
@@ -164,13 +161,6 @@ try {
         // The system previously prevented adding multiple candidates to the same position within the same party.
         // This check has been removed to allow multiple candidates per position (e.g., multiple Senators in one partylist).
 
-        // Add 'name' column to candidate table if it doesn't exist
-        $checkCol = $conn->query("SHOW COLUMNS FROM candidate LIKE 'name'");
-        if ($checkCol && $checkCol->num_rows == 0) {
-            $conn->query("ALTER TABLE candidate ADD COLUMN name VARCHAR(100) DEFAULT ''");
-            $conn->query("ALTER TABLE candidate MODIFY user_id VARCHAR(50) NULL");
-        }
-
         // Insert the candidate directly into the candidate table
         $c_id = 'C-' . mt_rand(10000, 99999);
         $stmtC = $conn->prepare("INSERT INTO candidate (id, user_id, name, position_title, party_id, election_id) VALUES (?, NULL, ?, ?, ?, ?)");
@@ -184,8 +174,10 @@ try {
     elseif ($action === 'delete_candidate') {
         $cand_id = $data['candidate_id'];
         
-        // Delete votes (handle both table names gracefully to prevent FK errors)
-        $conn->query("DELETE FROM vote WHERE candidate_id = '" . $conn->real_escape_string($cand_id) . "'");
+        // Delete votes linked to this candidate
+        $stmtDelV = $conn->prepare("DELETE FROM vote WHERE candidate_id = ?");
+        $stmtDelV->bind_param('s', $cand_id);
+        $stmtDelV->execute();
         
         // Delete candidate
         $stmtC = $conn->prepare("DELETE FROM candidate WHERE id = ?");
@@ -205,10 +197,13 @@ try {
         $stmt->execute();
         $res = $stmt->get_result();
         
+        $stmtDelV = $conn->prepare("DELETE FROM vote WHERE candidate_id = ?");
+        
         while ($row = $res->fetch_assoc()) {
             $cand_id = $row['id'];
             
-            $conn->query("DELETE FROM vote WHERE candidate_id = '" . $conn->real_escape_string($cand_id) . "'");
+            $stmtDelV->bind_param('s', $cand_id);
+            $stmtDelV->execute();
             
             $stmtC = $conn->prepare("DELETE FROM candidate WHERE id = ?");
             $stmtC->bind_param('s', $cand_id);
@@ -259,8 +254,13 @@ try {
     elseif ($action === 'delete_election') {
         $elec_id = $data['election_id'];
         
-        // 1. Delete all votes cast in this election (handles both table naming conventions)
-        $conn->query("DELETE FROM vote WHERE election_id = '" . $conn->real_escape_string($elec_id) . "'");
+        // Temporarily disable foreign key checks to prevent strict relational blocks
+        $conn->query("SET FOREIGN_KEY_CHECKS = 0");
+        
+        // 1. Delete all votes cast in this election
+        $stmtDelV = $conn->prepare("DELETE FROM vote WHERE election_id = ?");
+        $stmtDelV->bind_param('s', $elec_id);
+        $stmtDelV->execute();
         
         // 2. Delete candidates linked to this election
         $stmtDelC = $conn->prepare("DELETE FROM candidate WHERE election_id = ?");
@@ -272,10 +272,17 @@ try {
         $stmtDelP->bind_param('s', $elec_id);
         $stmtDelP->execute();
         
-        // 4. Finally, delete the election itself
+        // 4. Delete partylists linked specifically to this election
+        $stmtDelParty = $conn->prepare("DELETE FROM partylist WHERE election_id = ?");
+        $stmtDelParty->bind_param('s', $elec_id);
+        $stmtDelParty->execute();
+
+        // 5. Finally, delete the election itself
         $stmtDelE = $conn->prepare("DELETE FROM election WHERE id = ?");
         $stmtDelE->bind_param('s', $elec_id);
         $stmtDelE->execute();
+        
+        $conn->query("SET FOREIGN_KEY_CHECKS = 1");
         
         log_audit($conn, 'DELETE_ELECTION', "Deleted election ID: $elec_id");
         echo json_encode(['success' => true]);
@@ -284,10 +291,11 @@ try {
     elseif ($action === 'edit_election') {
         $elec_id = $data['election_id'];
         $title = $data['name'];
-        $date = $data['date'];
+        $start_date = $data['start_date'];
+        $end_date = $data['end_date'];
         
-        $stmt = $conn->prepare("UPDATE election SET title = ?, date_of_election = ? WHERE id = ?");
-        $stmt->bind_param('sss', $title, $date, $elec_id);
+        $stmt = $conn->prepare("UPDATE election SET title = ?, date_of_election = ?, start_date = ?, end_date = ? WHERE id = ?");
+        $stmt->bind_param('sssss', $title, $start_date, $start_date, $end_date, $elec_id);
         $stmt->execute();
         
         log_audit($conn, 'EDIT_ELECTION', "Edited election ID: $elec_id to $title");
@@ -328,14 +336,6 @@ try {
         $max_candidates = isset($data['max_candidates']) ? (int)$data['max_candidates'] : 100;
         $max_per_party = isset($data['max_per_party']) ? (int)$data['max_per_party'] : 1;
         
-        $conn->query("CREATE TABLE IF NOT EXISTS election_position (id INT AUTO_INCREMENT PRIMARY KEY, election_id VARCHAR(50), title VARCHAR(100), max_votes INT DEFAULT 1, max_candidates INT DEFAULT 100, max_per_party INT DEFAULT 1)");
-        $checkMax1 = $conn->query("SHOW COLUMNS FROM election_position LIKE 'max_votes'");
-        if ($checkMax1 && $checkMax1->num_rows == 0) $conn->query("ALTER TABLE election_position ADD COLUMN max_votes INT DEFAULT 1");
-        $checkMax2 = $conn->query("SHOW COLUMNS FROM election_position LIKE 'max_candidates'");
-        if ($checkMax2 && $checkMax2->num_rows == 0) $conn->query("ALTER TABLE election_position ADD COLUMN max_candidates INT DEFAULT 100");
-        $checkMax3 = $conn->query("SHOW COLUMNS FROM election_position LIKE 'max_per_party'");
-        if ($checkMax3 && $checkMax3->num_rows == 0) $conn->query("ALTER TABLE election_position ADD COLUMN max_per_party INT DEFAULT 1");
-        
         // Prevent duplicate positions in the same election
         $check = $conn->prepare("SELECT id FROM election_position WHERE election_id = ? AND LOWER(title) = LOWER(?)");
         $check->bind_param('ss', $elec_id, $title);
@@ -363,15 +363,19 @@ try {
         $stmtC->bind_param('ss', $elec_id, $title);
         $stmtC->execute();
         $resC = $stmtC->get_result();
+        
+        $stmtDelV = $conn->prepare("DELETE FROM vote WHERE candidate_id = ?");
         while ($row = $resC->fetch_assoc()) {
             $cand_id = $row['id'];
-            $conn->query("DELETE FROM vote WHERE candidate_id = '" . $conn->real_escape_string($cand_id) . "'");
+            $stmtDelV->bind_param('s', $cand_id);
+            $stmtDelV->execute();
         }
         $stmtC->close();
 
         // Delete abstain votes for this position
         $abstain_id = 'ABSTAIN__' . $title;
-        $conn->query("DELETE FROM vote WHERE candidate_id = '" . $conn->real_escape_string($abstain_id) . "'");
+        $stmtDelV->bind_param('s', $abstain_id);
+        $stmtDelV->execute();
 
         // 2. Delete candidates under this position
         $stmtDelC = $conn->prepare("DELETE FROM candidate WHERE election_id = ? AND position_title = ?");

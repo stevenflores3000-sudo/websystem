@@ -30,28 +30,15 @@ if (empty($election_id) || empty($votes) || !is_array($votes)) {
 }
 
 try {
-    // Dynamically patch the vote table to ensure it can hold long 'ABSTAIN__PositionName' IDs 
-    // and the 32-character transaction ID without throwing database exceptions.
-    try {
-        $pdo->exec("ALTER TABLE vote MODIFY candidate_id VARCHAR(100)");
-        $checkTxn = $pdo->query("SHOW COLUMNS FROM vote LIKE 'transaction_id'");
-        if ($checkTxn && $checkTxn->rowCount() == 0) {
-            $pdo->exec("ALTER TABLE vote ADD COLUMN transaction_id VARCHAR(100)");
-        } else {
-            $pdo->exec("ALTER TABLE vote MODIFY transaction_id VARCHAR(100)");
-        }
-    } catch(Exception $ex) {}
-    
     // Disable foreign key constraints for this session so we can insert virtual 'ABSTAIN__' records
     $pdo->exec("SET FOREIGN_KEY_CHECKS = 0");
 
     // 1. Validate user session vectors.
-    $userStmt = $pdo->prepare("SELECT has_voted FROM user WHERE id = :user_id");
-    $userStmt->execute([':user_id' => $user_id]);
-    $userCheck = $userStmt->fetch(PDO::FETCH_ASSOC);
+    $voteCheckStmt = $pdo->prepare("SELECT 1 FROM vote WHERE user_id = :user_id AND election_id = :election_id LIMIT 1");
+    $voteCheckStmt->execute([':user_id' => $user_id, ':election_id' => $election_id]);
     
-    if ($userCheck && $userCheck['has_voted'] == 1) {
-        echo json_encode(["success" => false, "message" => "Transaction Rejected: User has already cast a vote."]);
+    if ($voteCheckStmt->fetchColumn()) {
+        echo json_encode(["success" => false, "message" => "Transaction Rejected: You have already cast a vote in this election."]);
         exit;
     }
 
@@ -107,9 +94,6 @@ try {
             $insertStmt->execute([':user_id' => $user_id, ':election_id' => $election_id, ':candidate_id' => $candidate_id, ':txn_id' => $transaction_id]);
         }
     }
-
-    $updateUser = $pdo->prepare("UPDATE user SET has_voted = 1 WHERE id = :user_id");
-    $updateUser->execute([':user_id' => $user_id]);
 
     $pdo->commit();
     

@@ -98,28 +98,11 @@ if ($section === 'all' || $section === 'summary') {
 // ══════════════════════════════════════════════════════════════════════
 if ($section === 'all' || $section === 'voter_tracker') {
     
-    // Dynamically patch user table if columns are missing to prevent query crashes
-    try {
-        $checkDept = $conn->query("SHOW COLUMNS FROM user LIKE 'department'");
-        if ($checkDept && $checkDept->num_rows == 0) {
-            $conn->query("ALTER TABLE user ADD COLUMN department VARCHAR(100) DEFAULT ''");
-        }
-        $checkYear = $conn->query("SHOW COLUMNS FROM user LIKE 'year_level'");
-        if ($checkYear && $checkYear->num_rows == 0) {
-            $conn->query("ALTER TABLE user ADD COLUMN year_level VARCHAR(50) DEFAULT ''");
-        }
-    } catch(Exception $ex) {
-        // Ignore patch errors
-    }
-
     if ($election_id) {
         $stmt = $conn->prepare(
             "SELECT u.id, u.student_id, u.name, u.department, u.year_level,
-                    CASE WHEN v.user_id IS NOT NULL THEN 1 ELSE 0 END AS has_voted
+                    EXISTS(SELECT 1 FROM vote v WHERE v.user_id = u.id AND v.election_id = ?) AS has_voted
              FROM user u
-             LEFT JOIN (
-                 SELECT DISTINCT user_id FROM vote WHERE election_id = ?
-             ) v ON v.user_id = u.id
              WHERE u.id NOT LIKE 'CAND-%'
              ORDER BY u.name"
         );
@@ -128,11 +111,8 @@ if ($section === 'all' || $section === 'voter_tracker') {
         // has_voted = true if user voted in ANY election
         $stmt = $conn->prepare(
             "SELECT u.id, u.student_id, u.name, u.department, u.year_level,
-                    CASE WHEN v.user_id IS NOT NULL THEN 1 ELSE 0 END AS has_voted
+                    EXISTS(SELECT 1 FROM vote v WHERE v.user_id = u.id) AS has_voted
              FROM user u
-             LEFT JOIN (
-                 SELECT DISTINCT user_id FROM vote
-             ) v ON v.user_id = u.id
              WHERE u.id NOT LIKE 'CAND-%'
              ORDER BY u.name"
         );
@@ -167,10 +147,14 @@ if ($section === 'all' || $section === 'tally') {
 
     // Fetch all global party lists to populate the real IDs on the frontend
     $parties = [];
-    $p_res = $conn->query("SELECT id, name FROM partylist");
+    $p_res = $conn->query("SELECT * FROM partylist");
     if ($p_res) {
         while ($row = $p_res->fetch_assoc()) {
-            $parties[] = $row;
+            $parties[] = [
+                'id' => $row['id'],
+                'name' => $row['name'],
+                'election_id' => $row['election_id'] ?? null
+            ];
         }
     }
     $out['parties'] = $parties;
@@ -188,30 +172,6 @@ if ($section === 'all' || $section === 'tally') {
     // Fetch eligible voters once to avoid N+1 query overhead inside the loop
     $r = $conn->query("SELECT COUNT(*) AS cnt FROM user WHERE id NOT LIKE 'CAND-%'");
     $global_eligible = ($r && $row = $r->fetch_assoc()) ? (int)$row['cnt'] : 0;
-
-    // Safely apply candidate table schema patch if missing (prevents fatal query errors)
-    $checkCandName = $conn->query("SHOW COLUMNS FROM candidate LIKE 'name'");
-    if ($checkCandName && $checkCandName->num_rows == 0) {
-        $conn->query("ALTER TABLE candidate ADD COLUMN name VARCHAR(100) DEFAULT ''");
-        $conn->query("ALTER TABLE candidate MODIFY user_id VARCHAR(50) NULL");
-        $conn->query("UPDATE candidate c JOIN user u ON c.user_id = u.id SET c.name = u.name WHERE c.user_id LIKE 'CAND-%'");
-        $conn->query("UPDATE candidate SET user_id = NULL WHERE user_id LIKE 'CAND-%'");
-    }
-
-    // Ensure position table exists before we try to select from it
-    $conn->query("CREATE TABLE IF NOT EXISTS election_position (id INT AUTO_INCREMENT PRIMARY KEY, election_id VARCHAR(50), title VARCHAR(100), max_votes INT DEFAULT 1)");
-    $checkMax = $conn->query("SHOW COLUMNS FROM election_position LIKE 'max_votes'");
-    if ($checkMax && $checkMax->num_rows == 0) {
-        $conn->query("ALTER TABLE election_position ADD COLUMN max_votes INT DEFAULT 1");
-    }
-    $checkMax2 = $conn->query("SHOW COLUMNS FROM election_position LIKE 'max_candidates'");
-    if ($checkMax2 && $checkMax2->num_rows == 0) {
-        $conn->query("ALTER TABLE election_position ADD COLUMN max_candidates INT DEFAULT 100");
-    }
-    $checkMax3 = $conn->query("SHOW COLUMNS FROM election_position LIKE 'max_per_party'");
-    if ($checkMax3 && $checkMax3->num_rows == 0) {
-        $conn->query("ALTER TABLE election_position ADD COLUMN max_per_party INT DEFAULT 1");
-    }
 
     $elections_out = [];
 
@@ -310,25 +270,27 @@ if ($section === 'all' || $section === 'tally') {
             ];
         }
 
+        // Fetch all Abstain votes for this election in a single query to avoid the N+1 query loop
+        $abstain_counts = [];
+        $stmtA = $conn->prepare("SELECT candidate_id, COUNT(*) AS cnt FROM vote WHERE election_id = ? AND candidate_id LIKE 'ABSTAIN__%' GROUP BY candidate_id");
+        if ($stmtA) {
+            $stmtA->bind_param('s', $eid);
+            $stmtA->execute();
+            $resA = $stmtA->get_result();
+            while ($rowA = $resA->fetch_assoc()) $abstain_counts[$rowA['candidate_id']] = (int)$rowA['cnt'];
+            $stmtA->close();
+        }
+
         // Append virtual 'Abstain' counts for each position so it displays correctly on Admin Dashboard charts
         foreach ($positions as $posTitle => &$posCandidates) {
             $abstain_id = 'ABSTAIN__' . $posTitle;
-            $stmtA = $conn->prepare("SELECT COUNT(*) AS cnt FROM vote WHERE election_id = ? AND candidate_id = ?");
-            if ($stmtA) {
-                $stmtA->bind_param('ss', $eid, $abstain_id);
-                $stmtA->execute();
-                $resA = $stmtA->get_result();
-                $abs_cnt = ($resA && $rowA = $resA->fetch_assoc()) ? (int)$rowA['cnt'] : 0;
-                $stmtA->close();
-                
-                $posCandidates[] = [
-                    'candidate_id' => $abstain_id,
-                    'name'         => 'Abstain',
-                    'party_id'     => 'none',
-                    'party'        => '—',
-                    'votes'        => $abs_cnt,
-                ];
-            }
+            $posCandidates[] = [
+                'candidate_id' => $abstain_id,
+                'name'         => 'Abstain',
+                'party_id'     => 'none',
+                'party'        => '—',
+                'votes'        => $abstain_counts[$abstain_id] ?? 0,
+            ];
         }
 
         $turnout = $eligible > 0 ? round(($votes_cast / $eligible) * 100, 1) : 0;
@@ -338,6 +300,8 @@ if ($section === 'all' || $section === 'tally') {
             'name'            => $elec['title'],
             'status'          => $elec['status'] ?? 'active',
             'date'            => $elec['date_of_election'] ?? null,
+            'start_date'      => $elec['start_date'] ?? null,
+            'end_date'        => $elec['end_date'] ?? null,
             'eligible_voters' => $eligible,
             'votes_cast'      => $votes_cast,
             'turnout_pct'     => $turnout,
@@ -407,21 +371,6 @@ if ($section === 'receipt') {
 //  Returns the latest 50 activity logs recorded by admins.
 // ══════════════════════════════════════════════════════════════════════
 if ($section === 'audit_logs') {
-    // Ensure the table exists so the query doesn't crash if it's empty
-    $conn->query("CREATE TABLE IF NOT EXISTS audit_log (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        admin_id VARCHAR(50),
-        action VARCHAR(50),
-        details TEXT,
-        ip_address VARCHAR(45),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )");
-
-    // Ensure the database is indexed for fast date sorting
-    $checkIdx = $conn->query("SHOW INDEX FROM audit_log WHERE Key_name = 'idx_created_at'");
-    if ($checkIdx && $checkIdx->num_rows == 0) {
-        $conn->query("ALTER TABLE audit_log ADD INDEX idx_created_at (created_at)");
-    }
 
     $offset = isset($_GET['offset']) ? (int)$_GET['offset'] : 0;
     $limit  = 50;

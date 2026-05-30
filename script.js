@@ -235,6 +235,7 @@ function generateEmail() {
 //  NO localStorage. DB duplicate-check is done by PHP.
 // ══════════════════════════════════════════════════════
 function validateRegister(event) {
+    // This function is now just a boolean check, the modal handler will prevent default
     const id             = document.getElementById('regID').value.trim();
     const first          = document.getElementById('regFirst').value.trim();
     const last           = document.getElementById('regLast').value.trim();
@@ -247,31 +248,31 @@ function validateRegister(event) {
 
     if (!id || !first || !last) {
         showToast('Please fill in your Student ID and name.','error');
-        event.preventDefault(); return false;
+        return false;
     }
     if (!email || !email.includes('@')) {
         showToast('Please enter a valid NU email address.','error');
-        event.preventDefault(); return false;
+        return false;
     }
     if (!recoveryEmail || !recoveryEmail.toLowerCase().endsWith('@gmail.com')) {
         showToast('Please enter a valid personal Gmail address for recovery.','error');
-        event.preventDefault(); return false;
+        return false;
     }
     if (!dept.value || dept.selectedIndex === 0) {
         showToast('Please select your department.','error');
-        event.preventDefault(); return false;
+        return false;
     }
     if (!year.value || year.selectedIndex === 0) {
         showToast('Please select your year level.','error');
-        event.preventDefault(); return false;
+        return false;
     }
     if (pass.length < 6) {
         showToast('Password must be at least 6 characters.','error');
-        event.preventDefault(); return false;
+        return false;
     }
     if (pass !== confirm) {
         showToast('Passwords do not match.','error');
-        event.preventDefault(); return false;
+        return false;
     }
 
     // Ensure hidden full-name field is populated before POST
@@ -279,6 +280,31 @@ function validateRegister(event) {
 
     // Return true → form POSTs to register.php for MySQL storage
     return true;
+}
+
+function showRegisterConfirmModal(event) {
+    event.preventDefault(); // Always stop the form submission first
+
+    if (!validateRegister()) {
+        return; // Validation failed, toasts are already shown
+    }
+
+    // Populate the modal with the validated data
+    document.getElementById('confirmRegName').textContent = document.getElementById('regFullName').value;
+    document.getElementById('confirmRegId').textContent = document.getElementById('regID').value;
+    document.getElementById('confirmRegGmail').textContent = document.getElementById('regRecovery').value;
+
+    // Show the modal
+    document.getElementById('register-confirm-modal-overlay').classList.remove('d-none');
+}
+
+function closeRegisterConfirmModal() {
+    document.getElementById('register-confirm-modal-overlay').classList.add('d-none');
+}
+
+function proceedWithRegistration() {
+    closeRegisterConfirmModal();
+    document.getElementById('register-form').submit(); // Manually submit the form
 }
 
 // Keep alias for stray calls
@@ -836,6 +862,12 @@ async function fetchAuditLogs(loadMore = false) {
         const res = await fetch(`get_stats.php?section=audit_logs&offset=${auditLogOffset}`);
         const data = await res.json();
         
+        if (!data.success && data.error === 'Forbidden') {
+            showAuthPage();
+            showToast('Session ended or overwritten. Please log in as Admin again.', 'error');
+            return;
+        }
+
         if (data.success && data.audit_logs) {
             if (!loadMore && data.audit_logs.length === 0) {
                 container.innerHTML = '<div class="admin-empty-state"><i class="bi bi-journal-text"></i>No audit logs found.</div>';
@@ -900,7 +932,15 @@ async function renderOverview() {
         const response = await fetch('get_stats.php?section=all');
         const data     = await response.json();
 
-        if (!data.success) throw new Error('API error');
+        if (!data.success) throw new Error(data.error || 'API error');
+        if (!data.success) {
+            if (data.error === 'Forbidden') {
+                showAuthPage();
+                showToast('Session ended or overwritten. Please log in as Admin again.', 'error');
+                return;
+            }
+            throw new Error(data.error || 'API error');
+        }
 
         const stats = data.summary;
         document.getElementById('overview-stats').innerHTML = `
@@ -949,7 +989,7 @@ async function renderOverview() {
     } catch (err) {
         console.error('Error fetching stats from database:', err);
         document.getElementById('overview-stats').innerHTML =
-            '<div class="admin-empty-state" style="grid-column:1/-1;"><i class="bi bi-exclamation-triangle"></i> Error loading database statistics. Check if your XAMPP server is running.</div>';
+            `<div class="admin-empty-state" style="grid-column:1/-1;"><i class="bi bi-exclamation-triangle"></i> Error loading statistics: ${escapeHtml(err.message)}. Try logging out and logging back in.</div>`;
     }
 }
 
@@ -977,6 +1017,14 @@ async function fetchVoterData() {
         const data     = await response.json();
 
         if (!data.success) throw new Error(data.error || 'Server returned an error while fetching data.');
+        if (!data.success) {
+            if (data.error === 'Forbidden') {
+                showAuthPage();
+                showToast('Session ended or overwritten. Please log in as Admin again.', 'error');
+                return;
+            }
+            throw new Error(data.error || 'Server returned an error while fetching data.');
+        }
         if (!Array.isArray(data.voter_tracker)) throw new Error('Voter tracker data is missing or invalid.');
 
         const tracker = data.voter_tracker;
@@ -1084,7 +1132,7 @@ function renderElectionsList() {
             <div class="election-list-icon"><i class="bi bi-calendar-event-fill"></i></div>
             <div class="election-list-info">
                 <div class="election-list-name">${escapeHtml(e.name)}</div>
-                <div class="election-list-dates">${formatDateRange(e.startDate, e.endDate)} · ${e.eligibleVoters} eligible voters</div>
+                <div class="election-list-dates">Start: <strong>${formatDate(e.startDate)}</strong> · End: <strong>${formatDate(e.endDate)}</strong> · ${e.eligibleVoters} eligible voters</div>
             </div>
             <span class="election-status-badge ${e.status}"><i class="bi bi-circle-fill"></i>${e.status.charAt(0).toUpperCase()+e.status.slice(1)}</span>
             <select class="election-status-select" onchange="changeElectionStatus('${e.id}', this.value)">
@@ -1184,7 +1232,6 @@ function showAddElectionModal() {
     document.getElementById('newElectionName').value   = '';
     document.getElementById('newElectionStart').value  = '';
     document.getElementById('newElectionEnd').value    = '';
-    document.getElementById('newElectionVoters').value = '';
     document.getElementById('newElectionStatus').value = 'active';
     document.getElementById('election-modal-overlay').classList.remove('d-none');
     setTimeout(() => document.getElementById('newElectionName').focus(), 50);
@@ -1198,7 +1245,6 @@ async function addElection() {
     const name   = document.getElementById('newElectionName').value.trim();
     const start  = document.getElementById('newElectionStart').value;
     const end    = document.getElementById('newElectionEnd').value;
-    const voters = parseInt(document.getElementById('newElectionVoters').value) || 450;
     const status = document.getElementById('newElectionStatus').value;
 
     if (!name)  { showToast('Please enter an election name.','error'); return; }
@@ -1219,7 +1265,7 @@ async function addElection() {
         const res = await fetch('admin_api.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'add_election', name, start_date: start, status })
+            body: JSON.stringify({ action: 'add_election', name, start_date: start, end_date: end, status })
         });
         const data = await res.json();
         if (data.success) {
@@ -1242,7 +1288,8 @@ function showEditElectionModal(elecId) {
     if (!elec) return;
     document.getElementById('editElectionId').value = elec.id;
     document.getElementById('editElectionName').value = elec.name;
-    document.getElementById('editElectionDate').value = elec.startDate;
+    document.getElementById('editElectionStart').value = elec.startDate;
+    document.getElementById('editElectionEnd').value = elec.endDate;
     document.getElementById('edit-election-modal-overlay').classList.remove('d-none');
     setTimeout(() => document.getElementById('editElectionName').focus(), 50);
 }
@@ -1254,16 +1301,19 @@ function closeEditElectionModal() {
 async function saveEditElection() {
     const id   = document.getElementById('editElectionId').value;
     const name = document.getElementById('editElectionName').value.trim();
-    const date = document.getElementById('editElectionDate').value;
+    const start_date = document.getElementById('editElectionStart').value;
+    const end_date = document.getElementById('editElectionEnd').value;
 
     if (!name) { showToast('Please enter an election name.','error'); return; }
-    if (!date) { showToast('Please enter an election date.','error'); return; }
+    if (!start_date) { showToast('Please enter a start date.','error'); return; }
+    if (!end_date) { showToast('Please enter an end date.','error'); return; }
+    if (end_date < start_date) { showToast('End date cannot be before start date.','error'); return; }
 
     try {
         const res = await fetch('admin_api.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'edit_election', election_id: id, name, date })
+            body: JSON.stringify({ action: 'edit_election', election_id: id, name, start_date, end_date })
         });
         const data = await res.json();
         if (data.success) {
@@ -1274,7 +1324,7 @@ async function saveEditElection() {
             showToast('Election updated successfully!', 'success');
             updateAuthBadge();
         } else {
-            showToast('Error updating election.', 'error');
+            showToast(data.error || 'Error updating election.', 'error');
         }
     } catch (err) {
         showToast('Network error.', 'error');
@@ -1534,7 +1584,7 @@ async function addParty() {
         const res = await fetch('admin_api.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'add_party', name })
+            body: JSON.stringify({ action: 'add_party', election_id: elecId, name })
         });
         const data = await res.json();
         if (data.success) {
@@ -1618,6 +1668,90 @@ async function saveEditParty(elecId, partyId) {
     } catch (err) {
         showToast('Network error.', 'error');
     }
+}
+
+// ── Voter Profile Management ──────────────────────────────
+async function showProfileModal() {
+    document.getElementById('voter-profile-modal-overlay').classList.remove('d-none');
+    const input = document.getElementById('editRecoveryEmail');
+    input.value = 'Loading...';
+    input.disabled = true;
+    
+    // Clear out password fields so they are empty when the modal opens
+    document.getElementById('editOldPass').value = '';
+    document.getElementById('editNewPass').value = '';
+    document.getElementById('editConfirmPass').value = '';
+
+    try {
+        const res = await fetch('update_profile.php');
+        const data = await res.json();
+        if (data.success) {
+            input.value = data.recovery_email;
+        } else {
+            input.value = '';
+            showToast('Could not load current email.', 'error');
+        }
+    } catch (err) {
+        input.value = '';
+    }
+    input.disabled = false;
+}
+
+function closeProfileModal() {
+    document.getElementById('voter-profile-modal-overlay').classList.add('d-none');
+}
+
+async function saveProfile() {
+    const newEmail = document.getElementById('editRecoveryEmail').value.trim();
+    const oldPass = document.getElementById('editOldPass').value;
+    const newPass = document.getElementById('editNewPass').value;
+    const confirmPass = document.getElementById('editConfirmPass').value;
+
+    if (!newEmail || !newEmail.toLowerCase().endsWith('@gmail.com')) {
+        showToast('Please enter a valid Gmail address.', 'error');
+        return;
+    }
+
+    if (newPass) {
+        if (!oldPass) { showToast('Please enter your current password to change it.', 'error'); return; }
+        if (newPass.length < 6) { showToast('New password must be at least 6 characters.', 'error'); return; }
+        if (newPass !== confirmPass) { showToast('New passwords do not match.', 'error'); return; }
+    }
+
+    const btn = document.querySelector('#voter-profile-modal-overlay .btn-primary-cta');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="bi bi-arrow-repeat spin me-1"></i>Saving...'; }
+
+    try {
+        const res = await fetch('update_profile.php', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ 
+                recovery_email: newEmail,
+                old_password: oldPass,
+                new_password: newPass
+            }) 
+        });
+        const data = await res.json();
+        if (data.success) { 
+            showToast(newPass ? 'Profile and password updated! Please log in again.' : 'Recovery email updated!', 'success'); 
+            closeProfileModal(); 
+            if (newPass) setTimeout(() => showAuthPage(), 1500); // Log them out to verify new password
+        }
+        else { showToast(data.error || 'Failed to update profile.', 'error'); }
+    } catch (err) {
+        showToast('Network error.', 'error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-save me-1"></i>Save Changes'; }
+    }
+}
+
+// ── Logout Confirmation ───────────────────────────────────
+function showLogoutConfirmModal() {
+    document.getElementById('logout-confirm-modal-overlay').classList.remove('d-none');
+}
+
+function closeLogoutConfirmModal() {
+    document.getElementById('logout-confirm-modal-overlay').classList.add('d-none');
 }
 
 // ── Candidate Management ─────────────────
@@ -1796,6 +1930,15 @@ async function renderResults() {
         const data     = await response.json();
 
         if (!data.success || !data.elections?.length) throw new Error('No data');
+        if (!data.success) {
+            if (data.error === 'Forbidden') {
+                showAuthPage();
+                showToast('Session ended or overwritten. Please log in as Admin again.', 'error');
+                return;
+            }
+            throw new Error(data.error || 'No data');
+        }
+        if (!data.elections?.length) throw new Error('No data');
 
         const elec   = data.elections[0];
         const localE = getElection(elecId);
@@ -1909,7 +2052,7 @@ function renderArchive() {
             <div class="archive-icon"><i class="bi bi-archive-fill"></i></div>
             <div>
                 <div class="archive-name">${escapeHtml(e.name)}</div>
-                <div class="archive-dates">${formatDateRange(e.startDate, e.endDate)} · ${vCast} votes · ${turnout}% turnout</div>
+                <div class="archive-dates">Start: <strong>${formatDate(e.startDate)}</strong> · End: <strong>${formatDate(e.endDate)}</strong> · ${vCast} votes · ${turnout}% turnout</div>
             </div>
             <div class="archive-actions">
                 <button class="btn-outline-sm" onclick="viewArchivedResults('${e.id}')"><i class="bi bi-bar-chart me-1"></i>View Results</button>
@@ -2033,7 +2176,9 @@ async function loadElectionsFromDB() {
                 // Pre-fill parties directly from the database to retain true IDs
                 if (data.parties) {
                     data.parties.forEach(p => {
-                        partyMap[p.name] = { id: p.id, name: p.name, candidates: [] };
+                        if (p.election_id === e.id) {
+                            partyMap[p.name] = { id: p.id, name: p.name, candidates: [] };
+                        }
                     });
                 }
 
@@ -2061,8 +2206,8 @@ async function loadElectionsFromDB() {
                 return {
                     id:             e.id,
                     name:           e.name,
-                    startDate:      e.date ? e.date.split(' ')[0] : '',
-                    endDate:        e.date ? e.date.split(' ')[0] : '',
+                    startDate:      e.start_date ? e.start_date.split(' ')[0] : (e.date ? e.date.split(' ')[0] : ''),
+                    endDate:        e.end_date ? e.end_date.split(' ')[0] : (e.date ? e.date.split(' ')[0] : ''),
                     eligibleVoters: e.eligible_voters || 0,
                     status:         e.status || 'active',
                     archived:       e.status === 'archived',
@@ -2147,8 +2292,11 @@ window.addEventListener('DOMContentLoaded', async () => {
     // Populate the tracker election filter if it exists
     const trackerFilter = document.getElementById('tracker-election-filter');
     if (trackerFilter) {
-        trackerFilter.innerHTML = '<option value="">All Elections</option>'
-            + elections.map(e => `<option value="${e.id}">${escapeHtml(e.name)}</option>`).join('');
+        if (elections.length > 0) {
+            trackerFilter.innerHTML = elections.map(e => `<option value="${e.id}">${escapeHtml(e.name)}</option>`).join('');
+        } else {
+            trackerFilter.innerHTML = '<option value="">No Elections Available</option>';
+        }
     }
 
     // 3. Handle PHP redirect params (toasts, errors); if not a redirect, show auth page
